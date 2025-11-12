@@ -1,0 +1,5 @@
+[projects."/workspaces/care-manager-copilot"]
+sandbox_mode = "workspace-write"
+network_access = "enabled"
+search = true
+trust_level = "trusted"
