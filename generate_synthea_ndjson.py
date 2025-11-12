@@ -48,6 +48,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, help="Seed for deterministic runs.")
     parser.add_argument("--city", help="City name understood by Synthea (e.g., 'Boston').")
     parser.add_argument("--state", help="State name understood by Synthea (e.g., 'Massachusetts').")
+    parser.add_argument("--min-age", type=int, help="Minimum age for generated patients.")
+    parser.add_argument("--max-age", type=int, help="Maximum age for generated patients.")
     parser.add_argument(
         "--modules",
         nargs="+",
@@ -78,7 +80,7 @@ def ensure_synthea_jar(version: str, override: Path | None) -> Path:
     jar_dir = CACHE_DIR / version
     jar_path = jar_dir / "synthea-with-dependencies.jar"
     if jar_path.exists():
-        return jar_path
+        return jar_path.resolve()
     jar_dir.mkdir(parents=True, exist_ok=True)
     url = f"{RELEASE_BASE}/v{version}/synthea-with-dependencies.jar"
     print(f"Downloading Synthea {version} from {url}")
@@ -88,19 +90,23 @@ def ensure_synthea_jar(version: str, override: Path | None) -> Path:
             for chunk in response.iter_content(chunk_size=1_048_576):
                 if chunk:
                     fp.write(chunk)
-    return jar_path
+    return jar_path.resolve()
 
 
 def run_synthea(jar_path: Path, args: argparse.Namespace, work_dir: Path) -> Path:
     cmd = ["java", "-jar", str(jar_path), "-p", str(args.num_patients)]
     if args.seed is not None:
         cmd += ["-s", str(args.seed)]
+    if args.min_age is not None and args.max_age is not None:
+        cmd += ["-a", f"{args.min_age}-{args.max_age}"]
+    elif args.min_age is not None or args.max_age is not None:
+        sys.exit("Both --min-age and --max-age must be specified together.")
     if args.modules:
         cmd += ["-m", ",".join(args.modules)]
-    if args.city:
-        cmd += ["-c", args.city]
     if args.state:
         cmd.append(args.state)
+        if args.city:
+            cmd.append(args.city)
     print(f"Running Synthea: {' '.join(cmd)}")
     subprocess.run(cmd, cwd=work_dir, check=True)
     bundle_dir = work_dir / "output" / "fhir"

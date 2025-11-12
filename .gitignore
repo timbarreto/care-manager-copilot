@@ -51,3 +51,7 @@ htmlcov/
 # Node
 node_modules/
 package-lock.json
+
+# Synthea generated data
+synthea/
+.synthea_cache/
