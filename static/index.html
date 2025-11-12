@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Care Manager Copilot - FHIR Demo</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 800px;
+            width: 100%;
+            padding: 30px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .input-section {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #444;
+            font-weight: 600;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        button {
+            padding: 12px 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .result-section {
+            margin-top: 30px;
+            display: none;
+        }
+
+        .result-section.active {
+            display: block;
+        }
+
+        .result-box {
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            padding: 20px;
+            border-radius: 6px;
+            white-space: pre-wrap;
+            line-height: 1.6;
+            color: #333;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        .error {
+            background: #fee;
+            border-left-color: #e74c3c;
+            color: #c0392b;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #667eea;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .info-box {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            color: #1565c0;
+        }
+
+        .info-box strong {
+            display: block;
+            margin-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Care Manager Copilot</h1>
+        <p class="subtitle">FHIR-based member briefing and outreach assistant</p>
+
+        <div class="info-box">
+            <strong>How to use:</strong>
+            Enter a synthetic patient/member ID below. The system will fetch FHIR data from Azure Health Data Services and generate a care manager briefing with next-best actions and bilingual call scripts.
+        </div>
+
+        <div class="input-section">
+            <label for="memberId">Member/Patient ID:</label>
+            <div class="input-group">
+                <input
+                    type="text"
+                    id="memberId"
+                    placeholder="e.g., patient-123 or a FHIR patient ID"
+                    autocomplete="off"
+                >
+                <button id="submitBtn" onclick="getBriefing()">Get Briefing</button>
+            </div>
+        </div>
+
+        <div id="resultSection" class="result-section">
+            <div id="resultBox" class="result-box"></div>
+        </div>
+    </div>
+
+    <script>
+        const memberIdInput = document.getElementById('memberId');
+        const submitBtn = document.getElementById('submitBtn');
+        const resultSection = document.getElementById('resultSection');
+        const resultBox = document.getElementById('resultBox');
+
+        // Allow Enter key to submit
+        memberIdInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                getBriefing();
+            }
+        });
+
+        async function getBriefing() {
+            const memberId = memberIdInput.value.trim();
+
+            if (!memberId) {
+                alert('Please enter a member/patient ID');
+                return;
+            }
+
+            // Show loading state
+            resultSection.classList.add('active');
+            resultBox.className = 'result-box';
+            resultBox.innerHTML = '<div class="loading"><div class="spinner"></div><p>Fetching FHIR data and generating briefing...</p></div>';
+            submitBtn.disabled = true;
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ member_id: memberId })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultBox.className = 'result-box';
+                    resultBox.textContent = data.briefing;
+                } else {
+                    resultBox.className = 'result-box error';
+                    resultBox.textContent = `Error: ${data.error}`;
+                }
+            } catch (error) {
+                resultBox.className = 'result-box error';
+                resultBox.textContent = `Network error: ${error.message}`;
+            } finally {
+                submitBtn.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>

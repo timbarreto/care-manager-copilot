@@ -1,0 +1,27 @@
+# Azure and Authentication
+azure-identity>=1.15.0
+azure-core>=1.29.0
+
+# OpenAI SDK
+openai>=1.12.0
+
+# HTTP Requests
+requests>=2.31.0
+
+# Web Framework (Flask for simple API)
+flask>=3.0.0
+flask-cors>=4.0.0
+
+# Environment Variables
+python-dotenv>=1.0.0
+
+# FHIR Client (optional - for easier FHIR operations)
+fhirclient>=4.1.0
+
+# Development Tools
+black>=24.0.0
+pylint>=3.0.0
+pytest>=8.0.0
+
+# Data Processing
+pandas>=2.0.0
