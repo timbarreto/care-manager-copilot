@@ -53,4 +53,5 @@ package-lock.json
 
 # Synthea generated data
 synthea/
+synthea_ndjson_single/
 .synthea_cache/

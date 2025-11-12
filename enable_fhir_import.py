@@ -3,12 +3,14 @@
 Enable bulk import on Azure FHIR service using Azure REST API.
 
 This script configures the FHIR service to enable the $import operation
-required for bulk data ingestion.
+required for bulk data ingestion, enables system-assigned managed identity,
+and assigns Storage Blob Data Contributor role to the identity.
 """
 
 import os
 import sys
 import json
+import uuid
 import requests
 from dotenv import load_dotenv
 from azure.identity import DefaultAzureCredential
@@ -27,6 +29,55 @@ def get_subscription_id():
     return None
 
 
+def assign_storage_role(subscription_id, storage_account_name, storage_resource_group, principal_id, headers):
+    """Assign Storage Blob Data Contributor role to the managed identity."""
+    # Storage Blob Data Contributor role ID
+    role_definition_id = "ba92f5b4-2d11-453d-a403-e96b0029c9fe"
+
+    # Construct storage account resource ID
+    storage_resource_id = (
+        f"/subscriptions/{subscription_id}"
+        f"/resourceGroups/{storage_resource_group}"
+        f"/providers/Microsoft.Storage/storageAccounts/{storage_account_name}"
+    )
+
+    # Construct role assignment URL
+    api_version = "2022-04-01"
+    role_assignment_name = str(uuid.uuid4())
+    role_assignment_url = (
+        f"https://management.azure.com{storage_resource_id}"
+        f"/providers/Microsoft.Authorization/roleAssignments/{role_assignment_name}"
+        f"?api-version={api_version}"
+    )
+
+    # Role assignment payload
+    role_payload = {
+        "properties": {
+            "roleDefinitionId": f"{storage_resource_id}/providers/Microsoft.Authorization/roleDefinitions/{role_definition_id}",
+            "principalId": principal_id,
+            "principalType": "ServicePrincipal"
+        }
+    }
+
+    print(f"\nAssigning Storage Blob Data Contributor role...")
+    print(f"  Storage Account: {storage_account_name}")
+    print(f"  Principal ID: {principal_id}")
+
+    response = requests.put(role_assignment_url, headers=headers, json=role_payload, timeout=30)
+
+    if response.status_code in [200, 201]:
+        print(f"✓ Role assignment successful")
+        return True
+    elif response.status_code == 409:
+        # Role assignment already exists
+        print(f"✓ Role assignment already exists")
+        return True
+    else:
+        print(f"✗ Role assignment failed (HTTP {response.status_code})")
+        print(response.text)
+        return False
+
+
 def main():
     # Load environment variables
     load_dotenv()
@@ -34,6 +85,20 @@ def main():
     resource_group = os.getenv("FHIR_RESOURCE_GROUP")
     workspace_name = os.getenv("FHIR_WORKSPACE_NAME")
     service_name = os.getenv("FHIR_SERVICE_NAME")
+    storage_account_name = os.getenv("STORAGE_ACCOUNT_NAME")
+    storage_resource_group = os.getenv("STORAGE_RESOURCE_GROUP")
+
+    # If storage account name is not provided, try to extract from SAS URL
+    if not storage_account_name:
+        sas_url = os.getenv("FHIR_IMPORT_CONTAINER_SAS_URL", "")
+        if "blob.core.windows.net" in sas_url:
+            # Extract storage account name from URL like https://account.blob.core.windows.net/...
+            storage_account_name = sas_url.split("//")[1].split(".")[0]
+            print(f"Extracted storage account name from SAS URL: {storage_account_name}")
+
+    # Use FHIR resource group as default for storage if not specified
+    if not storage_resource_group:
+        storage_resource_group = resource_group
 
     if not all([resource_group, workspace_name, service_name]):
         print("Error: Missing required environment variables:")
@@ -42,12 +107,22 @@ def main():
         print(f"  FHIR_SERVICE_NAME: {service_name}")
         sys.exit(1)
 
+    if not storage_account_name:
+        print("Warning: Storage account name not found. Skipping RBAC role assignment.")
+        print("  Set STORAGE_ACCOUNT_NAME or FHIR_IMPORT_CONTAINER_SAS_URL to enable role assignment.")
+        assign_rbac = False
+    else:
+        assign_rbac = True
+
     print("=" * 70)
     print("Azure FHIR Service - Enable Bulk Import")
     print("=" * 70)
     print(f"Resource Group: {resource_group}")
     print(f"Workspace Name: {workspace_name}")
     print(f"Service Name: {service_name}")
+    if assign_rbac:
+        print(f"Storage Account: {storage_account_name}")
+        print(f"Storage Resource Group: {storage_resource_group}")
     print("=" * 70)
 
     # Get subscription ID
@@ -170,13 +245,35 @@ def main():
         identity_result = result.get('identity', {})
         print(f"\nManaged Identity:")
         print(f"  Type: {identity_result.get('type', 'None')}")
-        print(f"  Principal ID: {identity_result.get('principalId', 'N/A')}")
+        principal_id = identity_result.get('principalId', 'N/A')
+        print(f"  Principal ID: {principal_id}")
 
         import_result = result.get('properties', {}).get('importConfiguration', {})
         print(f"\nImport Configuration:")
         print(f"  Enabled: {import_result.get('enabled', False)}")
         print(f"  Initial Import Mode: {import_result.get('initialImportMode', False)}")
 
+        # Assign Storage Blob Data Contributor role
+        if assign_rbac and principal_id != 'N/A':
+            print("\n" + "=" * 70)
+            print("Assigning Storage RBAC Role")
+            print("=" * 70)
+            role_assigned = assign_storage_role(
+                subscription_id,
+                storage_account_name,
+                storage_resource_group,
+                principal_id,
+                headers
+            )
+            if not role_assigned:
+                print("\n⚠ Warning: Failed to assign storage role. You may need to assign it manually.")
+                print(f"  Role: Storage Blob Data Contributor")
+                print(f"  Principal ID: {principal_id}")
+                print(f"  Storage Account: {storage_account_name}")
+
+        print("\n" + "=" * 70)
+        print("Next Steps")
+        print("=" * 70)
         print("\nYou can now run the load_synthea_data.py script to import data:")
         print(f"  python load_synthea_data.py --input-dir synthea/ils_miami --skip-upload --prefix synthea-20251112212922 --wait")
 
