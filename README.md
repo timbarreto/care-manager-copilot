@@ -1,0 +1,1 @@
+A web chat where you enter a member ID (synthetic). The bot pulls the member’s FHIR data (conditions, meds, encounters, observations, care plans) and returns a case‑manager briefing plus next‑best actions and a call script. This aligns with ILS’s HCBS/case‑management focus.
