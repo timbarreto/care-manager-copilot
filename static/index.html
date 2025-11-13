@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Care Manager Copilot</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
     <style>
         :root {
             --blue-900: #0f3554;
@@ -242,7 +243,6 @@
         }
 
         #briefingPanel {
-            white-space: pre-wrap;
             padding-top: 10px;
         }
 
@@ -348,6 +348,93 @@
         .fhir-panel-inner {
             width: 100%;
             max-width: 780px;
+        }
+
+        /* Markdown-formatted briefing content styles */
+        .briefing-content h2 {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--blue-900);
+            margin-top: 24px;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid var(--gray-200);
+        }
+
+        .briefing-content h2:first-child {
+            margin-top: 0;
+        }
+
+        .briefing-content h3 {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--blue-700);
+            margin-top: 16px;
+            margin-bottom: 8px;
+        }
+
+        .briefing-content p {
+            margin-bottom: 12px;
+            line-height: 1.6;
+            color: #2c3e50;
+        }
+
+        .briefing-content ul,
+        .briefing-content ol {
+            margin-bottom: 16px;
+            padding-left: 24px;
+        }
+
+        .briefing-content li {
+            margin-bottom: 8px;
+            line-height: 1.6;
+            color: #2c3e50;
+        }
+
+        .briefing-content strong {
+            font-weight: 600;
+            color: var(--blue-900);
+        }
+
+        .briefing-content em {
+            font-style: italic;
+            color: var(--blue-700);
+        }
+
+        .briefing-content code {
+            background: var(--gray-50);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+            font-size: 13px;
+        }
+
+        .briefing-content pre {
+            background: var(--gray-50);
+            border: 1px solid var(--gray-200);
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 16px;
+            overflow-x: auto;
+        }
+
+        .briefing-content pre code {
+            background: none;
+            padding: 0;
+        }
+
+        .briefing-content blockquote {
+            border-left: 4px solid var(--blue-700);
+            padding-left: 16px;
+            margin: 16px 0;
+            color: var(--gray-400);
+            font-style: italic;
+        }
+
+        .briefing-content hr {
+            border: none;
+            border-top: 1px solid var(--gray-200);
+            margin: 24px 0;
         }
 
         @keyframes spin {
@@ -574,11 +661,24 @@
 
         function renderBriefingContent(text) {
             const isHidden = briefingPanel.classList.contains('hidden');
-            briefingPanel.className = 'tab-panel briefing-body';
+            briefingPanel.className = 'tab-panel briefing-body briefing-content';
             if (isHidden) {
                 briefingPanel.classList.add('hidden');
             }
-            briefingPanel.textContent = text || 'Briefing completed but no content returned.';
+
+            if (!text) {
+                briefingPanel.textContent = 'Briefing completed but no content returned.';
+                return;
+            }
+
+            // Parse markdown and render as HTML
+            try {
+                const htmlContent = marked.parse(text);
+                briefingPanel.innerHTML = htmlContent;
+            } catch (error) {
+                console.error('Failed to parse markdown:', error);
+                briefingPanel.textContent = text;
+            }
         }
 
         function setPanelError(panel, message) {
