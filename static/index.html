@@ -101,7 +101,7 @@
             display: grid;
             grid-template-columns: minmax(33.33%, 38%) 1fr;
             gap: 24px;
-            align-items: start;
+            align-items: stretch;
         }
 
         .panel {
@@ -238,8 +238,19 @@
             flex: 1;
             padding: 0 24px 24px 24px;
             overflow-y: auto;
-            white-space: pre-wrap;
             line-height: 1.6;
+        }
+
+        #briefingPanel {
+            white-space: pre-wrap;
+        }
+
+        .briefing-body > * {
+            margin-top: 0;
+        }
+
+        .briefing-body > .fhir-panel-inner {
+            padding-top: 8px;
         }
 
         .tab-list {
@@ -336,7 +347,6 @@
         .fhir-panel-inner {
             width: 100%;
             max-width: 780px;
-            margin: 0 auto;
         }
 
         @keyframes spin {
