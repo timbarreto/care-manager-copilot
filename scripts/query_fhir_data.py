@@ -7,10 +7,28 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime, timedelta
 
 import requests
 from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
+
+
+RESOURCE_DATE_PARAMS = {
+    "Observation": "date",
+    "Condition": "onset-date",
+    "Encounter": "date",
+    "Procedure": "performed",
+    "MedicationRequest": "authoredon",
+    "AllergyIntolerance": "recorded-date",
+    "Immunization": "date",
+    "DiagnosticReport": "date",
+    "CarePlan": "date",
+    "CareTeam": "date",
+    "DocumentReference": "date",
+    "Claim": "created",
+    "ExplanationOfBenefit": "created",
+}
 
 
 def parse_args():
@@ -23,6 +41,11 @@ def parse_args():
     parser.add_argument(
         "--patient-id",
         help="Patient ID to fetch all related data for",
+    )
+    parser.add_argument(
+        "--years",
+        type=int,
+        help="Limit related resources to the last X years when using --patient-id.",
     )
     parser.add_argument(
         "--count",
@@ -101,7 +124,14 @@ def get_patient(fhir_url: str, credential: DefaultAzureCredential, patient_id: s
     return response.json()
 
 
-def get_patient_resources(fhir_url: str, credential: DefaultAzureCredential, patient_id: str, resource_type: str, count: int = 1000):
+def get_patient_resources(
+    fhir_url: str,
+    credential: DefaultAzureCredential,
+    patient_id: str,
+    resource_type: str,
+    count: int = 1000,
+    since: datetime | None = None,
+):
     """Get all resources of a specific type for a patient."""
     access_token = credential.get_token(f"{fhir_url}/.default").token
     headers = {
@@ -109,17 +139,63 @@ def get_patient_resources(fhir_url: str, credential: DefaultAzureCredential, pat
         "Accept": "application/fhir+json",
     }
 
-    query_url = f"{fhir_url}/{resource_type}?patient={patient_id}&_count={count}"
-    response = requests.get(query_url, headers=headers, timeout=30)
+    patient_ref = patient_id if patient_id.startswith("Patient/") else f"Patient/{patient_id}"
+    patient_id_only = patient_ref.split("/", 1)[1] if "/" in patient_ref else patient_ref
 
-    if response.status_code == 200:
-        return response.json()
-    return None
+    search_params = [
+        ("patient", patient_id_only),
+        ("patient", patient_ref),
+        ("subject", patient_id_only),
+        ("subject", patient_ref),
+    ]
+    if resource_type in {"Claim", "ExplanationOfBenefit"}:
+        search_params.extend(
+            [("beneficiary", patient_id_only), ("beneficiary", patient_ref)]
+        )
+
+    combined_entries = []
+    seen_resource_ids = set()
+
+    date_filters = []
+    if since:
+        filter_param = RESOURCE_DATE_PARAMS.get(resource_type)
+        if filter_param:
+            filter_value = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+            date_filters.append(f"{filter_param}=ge{filter_value}")
+
+    for param, value in search_params:
+        filter_str = "&".join(date_filters)
+        filter_str = f"&{filter_str}" if filter_str else ""
+        query_url = f"{fhir_url}/{resource_type}?{param}={value}{filter_str}&_count={count}"
+        response = requests.get(query_url, headers=headers, timeout=30)
+        if response.status_code != 200:
+            continue
+        bundle = response.json()
+        for entry in bundle.get("entry", []):
+            resource = entry.get("resource", {})
+            res_id = resource.get("id")
+            if res_id and res_id in seen_resource_ids:
+                continue
+            if res_id:
+                seen_resource_ids.add(res_id)
+            combined_entries.append(entry)
+        if len(combined_entries) >= count:
+            break
+
+    if not combined_entries:
+        return None
+
+    return {"resourceType": "Bundle", "entry": combined_entries}
 
 
-def get_all_patient_data(fhir_url: str, credential: DefaultAzureCredential, patient_id: str):
+def get_all_patient_data(
+    fhir_url: str,
+    credential: DefaultAzureCredential,
+    patient_id: str,
+    since: datetime | None = None,
+):
     """Get patient and all related resources."""
-    print(f"\nFetching all data for Patient/{patient_id}...")
+    print(f"\nFetching all data for Patient/{patient_id}{f' since {since.date()}' if since else ''}...")
 
     # Get the patient
     patient = get_patient(fhir_url, credential, patient_id)
@@ -148,7 +224,7 @@ def get_all_patient_data(fhir_url: str, credential: DefaultAzureCredential, pati
 
     for resource_type in resource_types:
         print(f"  Fetching {resource_type}...")
-        bundle = get_patient_resources(fhir_url, credential, patient_id, resource_type)
+        bundle = get_patient_resources(fhir_url, credential, patient_id, resource_type, since=since)
         if bundle and bundle.get('entry'):
             all_data['resources'][resource_type] = bundle.get('entry', [])
             print(f"    Found {len(bundle.get('entry', []))} {resource_type} resources")
@@ -361,7 +437,13 @@ def main():
 
     # If patient-id is provided, fetch all patient data
     if args.patient_id:
-        patient_data = get_all_patient_data(fhir_url, credential, args.patient_id)
+        since = None
+        if args.years is not None:
+            if args.years <= 0:
+                sys.exit("--years must be a positive integer.")
+            since = datetime.utcnow() - timedelta(days=365 * args.years)
+            print(f"Limiting related resources to dates >= {since.date().isoformat()} ({args.years} year(s)).")
+        patient_data = get_all_patient_data(fhir_url, credential, args.patient_id, since=since)
         display_patient_data(patient_data)
     else:
         # Regular resource query

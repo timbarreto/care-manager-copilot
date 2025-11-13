@@ -63,7 +63,8 @@ def assign_storage_role(subscription_id, storage_account_name, storage_resource_
     print(f"  Storage Account: {storage_account_name}")
     print(f"  Principal ID: {principal_id}")
 
-    response = requests.put(role_assignment_url, headers=headers, json=role_payload, timeout=30)
+    response = requests.put(role_assignment_url,
+                            headers=headers, json=role_payload, timeout=30)
 
     if response.status_code in [200, 201]:
         print(f"✓ Role assignment successful")
@@ -94,7 +95,8 @@ def main():
         if "blob.core.windows.net" in sas_url:
             # Extract storage account name from URL like https://account.blob.core.windows.net/...
             storage_account_name = sas_url.split("//")[1].split(".")[0]
-            print(f"Extracted storage account name from SAS URL: {storage_account_name}")
+            print(
+                f"Extracted storage account name from SAS URL: {storage_account_name}")
 
     # Use FHIR resource group as default for storage if not specified
     if not storage_resource_group:
@@ -136,7 +138,8 @@ def main():
     # Authenticate
     try:
         print("\nAuthenticating...")
-        credential = DefaultAzureCredential(exclude_interactive_browser_credential=False)
+        credential = DefaultAzureCredential(
+            exclude_interactive_browser_credential=False)
 
         # Get access token for Azure Resource Manager
         token = credential.get_token("https://management.azure.com/.default")
@@ -170,12 +173,14 @@ def main():
         print(f"  Kind: {current_config.get('kind')}")
 
         # Check provisioning state
-        provisioning_state = current_config.get('properties', {}).get('provisioningState', 'Unknown')
+        provisioning_state = current_config.get(
+            'properties', {}).get('provisioningState', 'Unknown')
         print(f"  Provisioning State: {provisioning_state}")
 
         # Wait for provisioning to complete if needed
         if provisioning_state not in ['Succeeded', 'Failed']:
-            print(f"\nWaiting for provisioning to complete (current state: {provisioning_state})...")
+            print(
+                f"\nWaiting for provisioning to complete (current state: {provisioning_state})...")
             import time
             max_wait = 300  # 5 minutes
             waited = 0
@@ -185,17 +190,21 @@ def main():
                 response = requests.get(get_url, headers=headers, timeout=30)
                 if response.status_code == 200:
                     current_config = response.json()
-                    provisioning_state = current_config.get('properties', {}).get('provisioningState', 'Unknown')
+                    provisioning_state = current_config.get(
+                        'properties', {}).get('provisioningState', 'Unknown')
                     print(f"  State after {waited}s: {provisioning_state}")
 
             if provisioning_state != 'Succeeded':
-                print(f"\nError: Provisioning did not complete successfully (state: {provisioning_state})")
+                print(
+                    f"\nError: Provisioning did not complete successfully (state: {provisioning_state})")
                 sys.exit(1)
             print("Provisioning completed successfully!")
 
-        import_config = current_config.get('properties', {}).get('importConfiguration', {})
+        import_config = current_config.get(
+            'properties', {}).get('importConfiguration', {})
         print(f"  Import Enabled: {import_config.get('enabled', False)}")
-        print(f"  Initial Import Mode: {import_config.get('initialImportMode', False)}")
+        print(
+            f"  Initial Import Mode: {import_config.get('initialImportMode', False)}")
 
         # Check identity
         identity = current_config.get('identity', {})
@@ -218,14 +227,16 @@ def main():
                 "--api-version", "2022-06-01",
                 "--set", "identity.type=SystemAssigned"
             ]
-            result = subprocess.run(identity_cmd, capture_output=True, text=True, timeout=180)
+            result = subprocess.run(
+                identity_cmd, capture_output=True, text=True, timeout=180)
             if result.returncode != 0:
                 print(f"Error enabling managed identity: {result.stderr}")
                 sys.exit(1)
             print("✓ Managed identity enabled")
 
         # Enable import configuration with integration data store
-        print(f"Enabling import configuration with integration data store: {storage_account_name}")
+        print(
+            f"Enabling import configuration with integration data store: {storage_account_name}")
         print("Note: Initial import mode is required for importing data into an empty FHIR server")
         import_cmd = [
             "az", "resource", "update",
@@ -237,7 +248,8 @@ def main():
             f"properties.importConfiguration.integrationDataStore={storage_account_name}"
         ]
 
-        result = subprocess.run(import_cmd, capture_output=True, text=True, timeout=300)
+        result = subprocess.run(
+            import_cmd, capture_output=True, text=True, timeout=300)
 
         if result.returncode != 0:
             print(f"\n" + "=" * 70)
@@ -259,11 +271,14 @@ def main():
         principal_id = identity_result.get('principalId', 'N/A')
         print(f"  Principal ID: {principal_id}")
 
-        import_result = result_data.get('properties', {}).get('importConfiguration', {})
+        import_result = result_data.get(
+            'properties', {}).get('importConfiguration', {})
         print(f"\nImport Configuration:")
         print(f"  Enabled: {import_result.get('enabled', False)}")
-        print(f"  Initial Import Mode: {import_result.get('initialImportMode', False)}")
-        print(f"  Integration Data Store: {import_result.get('integrationDataStore', 'N/A')}")
+        print(
+            f"  Initial Import Mode: {import_result.get('initialImportMode', False)}")
+        print(
+            f"  Integration Data Store: {import_result.get('integrationDataStore', 'N/A')}")
 
         # Assign Storage Blob Data Contributor role
         if assign_rbac and principal_id != 'N/A':
@@ -278,7 +293,8 @@ def main():
                 headers
             )
             if not role_assigned:
-                print("\n⚠ Warning: Failed to assign storage role. You may need to assign it manually.")
+                print(
+                    "\n⚠ Warning: Failed to assign storage role. You may need to assign it manually.")
                 print(f"  Role: Storage Blob Data Contributor")
                 print(f"  Principal ID: {principal_id}")
                 print(f"  Storage Account: {storage_account_name}")
