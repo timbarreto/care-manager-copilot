@@ -38,6 +38,7 @@ pushd "${REPO_ROOT}" >/dev/null
 zip -r "${ZIP_PATH}" \
     app.py \
     fhir_service.py \
+    care_manager_prompt.md \
     requirements.txt \
     static \
     README.md \

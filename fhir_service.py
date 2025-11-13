@@ -85,15 +85,10 @@ class FHIRCareManagerService:
         Returns:
             Care manager briefing as text
         """
-        system_prompt = (
-            "You are a care-management assistant for community-based services. "
-            "From the FHIR bundle, produce: "
-            "(1) concise member overview; "
-            "(2) key risks & SDoH (Social Determinants of Health); "
-            "(3) 3 next-best outreach actions; "
-            "(4) a short phone script in English and Spanish. "
-            "Avoid clinical advice; stick to the facts in the data."
-        )
+        # Load system prompt from markdown file
+        prompt_file = os.path.join(os.path.dirname(__file__), "care_manager_prompt.md")
+        with open(prompt_file, "r", encoding="utf-8") as f:
+            system_prompt = f.read().strip()
 
         # Truncate bundle to fit token limits (keeping first 150k chars)
         bundle_str = json.dumps(bundle_json, indent=2)[:150000]
