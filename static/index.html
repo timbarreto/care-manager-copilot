@@ -325,13 +325,7 @@
             line-height: 1.5;
             white-space: pre;
             overflow-x: auto;
-            margin-top: 12px;
-        }
-
-        .fhir-summary {
-            font-size: 14px;
-            color: var(--blue-900);
-            margin-bottom: 12px;
+            margin-top: 0;
         }
 
         .fhir-panel-inner {
@@ -548,7 +542,7 @@
             `);
         }
 
-        function renderFhirData(bundle, entryCount = 0) {
+        function renderFhirData(bundle) {
             if (!bundle) {
                 showFhirPlaceholder();
                 return;
@@ -557,7 +551,6 @@
             const truncatedJson = JSON.stringify(bundle, null, 2) || '{}';
             setPanel(fhirPanel, '', `
                 <div class="fhir-panel-inner">
-                    <div class="fhir-summary">Showing ${entryCount} FHIR resources.</div>
                     <pre class="code-block">${escapeHtml(truncatedJson)}</pre>
                 </div>
             `);
@@ -725,7 +718,7 @@
             briefingStream.addEventListener('fhir_data', (event) => {
                 try {
                     const payload = JSON.parse(event.data);
-                    renderFhirData(payload.bundle, payload.bundle_entry_count || 0);
+                    renderFhirData(payload.bundle);
                     if (payload.message) {
                         updateBriefingStatus(payload.message, { loading: true });
                     }
@@ -790,7 +783,7 @@
                     throw new Error(data.error || 'Unable to generate briefing');
                 }
 
-                renderFhirData(data.bundle, data.bundle_entry_count || 0);
+                renderFhirData(data.bundle);
                 renderBriefingContent(data.briefing);
                 updateBriefingStatus(`Briefing ready · ${data.bundle_entry_count || 0} FHIR entries analyzed`, { loading: false });
                 setActiveTab('briefing');
