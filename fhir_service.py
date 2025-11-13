@@ -104,8 +104,8 @@ class FHIRCareManagerService:
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.2
+            ]
+            # Note: temperature parameter removed as gpt-5-mini only supports default (1)
         )
 
         return response.choices[0].message.content

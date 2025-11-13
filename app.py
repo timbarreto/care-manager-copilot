@@ -9,13 +9,43 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv
 from fhir_service import FHIRCareManagerService
+from azure.identity import DefaultAzureCredential
+from azure.keyvault.secrets import SecretClient
 
 # Load environment variables
 load_dotenv()
 
+def configure_aoai_key_from_key_vault():
+    """
+    Hydrate AOAI_API_KEY from Azure Key Vault if configuration is provided.
+    """
+    vault_name = os.environ.get('AZURE_KEY_VALUT') or os.environ.get('AZURE_KEY_VAULT')
+    secret_name = os.environ.get('AOAI_API_KEY_NAME')
+
+    # Nothing to do if key vault lookup is not configured
+    if not vault_name or not secret_name:
+        return
+
+    vault_url = vault_name.rstrip('/')
+    if '://' not in vault_url:
+        vault_url = f"https://{vault_url}.vault.azure.net"
+
+    try:
+        credential = DefaultAzureCredential()
+        client = SecretClient(vault_url=vault_url, credential=credential)
+        secret = client.get_secret(secret_name).value
+        os.environ['AOAI_API_KEY'] = secret
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to fetch AOAI API key '{secret_name}' from Key Vault '{vault_name}': {exc}"
+        ) from exc
+
+
 # Initialize Flask app
 app = Flask(__name__, static_folder='static')
 CORS(app)
+
+configure_aoai_key_from_key_vault()
 
 # Initialize FHIR service (lazy loading to handle missing env vars gracefully)
 fhir_service = None
