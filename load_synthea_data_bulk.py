@@ -3,9 +3,10 @@
 Utility script to bulk-load Synthea FHIR NDJSON into an Azure FHIR workspace.
 
 Steps performed:
-1. Upload every *.ndjson file from the provided directory to a blob container.
-2. Trigger the FHIR $import operation so the service ingests the uploaded data.
-3. (Optional) Poll the import status until completion.
+1. Rewrite conditional references (e.g., `Patient?identifier=`) to fixed `ResourceType/id` links and stage sanitized NDJSON files.
+2. Upload every staged *.ndjson file to a blob container.
+3. Trigger a first $import pass for base resources (Patient, Organization, Practitioner) and wait for completion.
+4. Trigger a second $import pass for dependent resources (Encounter, Observation, etc.) and optionally poll until completion.
 
 Requirements:
 - FHIR_URL must be set (or passed via --fhir-url)
@@ -16,13 +17,15 @@ Requirements:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
-from urllib.parse import urlparse
+from typing import Dict, Iterable, List, Sequence, Tuple
+from urllib.parse import parse_qs, urlparse
 
 import requests
 from azure.identity import DefaultAzureCredential
@@ -31,6 +34,8 @@ from dotenv import load_dotenv
 
 
 NdjsonUpload = Tuple[Path, str, str]
+IdentifierKey = Tuple[str, str, str]
+BASE_RESOURCE_TYPES = {"patient", "organization", "practitioner"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -120,12 +125,232 @@ def discover_ndjson_files(
     return files
 
 
+def partition_files_by_stage(files: Sequence[Tuple[Path, str]]) -> Tuple[List[Tuple[Path, str]], List[Tuple[Path, str]]]:
+    """Split NDJSON files into base (stage 1) and dependent (stage 2) sets."""
+    base_files: List[Tuple[Path, str]] = []
+    dependent_files: List[Tuple[Path, str]] = []
+
+    for file_path, resource_type in files:
+        if resource_type.lower() in BASE_RESOURCE_TYPES:
+            base_files.append((file_path, resource_type))
+        else:
+            dependent_files.append((file_path, resource_type))
+
+    return base_files, dependent_files
+
+
+def iter_ndjson_resources(path: Path) -> Iterable[Dict]:
+    """Yield JSON objects from an NDJSON file."""
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                yield json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                sys.exit(f"Failed to parse JSON in {path} at line {line_number}: {exc}")
+
+
+def collect_identifier_index(
+    files: Sequence[Tuple[Path, str]]
+) -> Tuple[Dict[IdentifierKey, str], Dict[str, str]]:
+    """Build lookup tables for identifier->resource ID resolution."""
+    index: Dict[IdentifierKey, str] = {}
+    canonical_types: Dict[str, str] = {}
+
+    for file_path, fallback_type in files:
+        for resource in iter_ndjson_resources(file_path):
+            resource_type = (resource.get("resourceType") or fallback_type or "").strip()
+            if not resource_type:
+                continue
+            resource_key = resource_type.lower()
+            canonical_types.setdefault(resource_key, resource_type)
+
+            resource_id = resource.get("id")
+            if not resource_id:
+                continue
+
+            # Allow matching purely by resource ID if references already conform.
+            index.setdefault((resource_key, "", resource_id), resource_id)
+
+            for system, value in extract_identifier_values(resource.get("identifier")):
+                if not value:
+                    continue
+                sys_key = system or ""
+                key_with_system = (resource_key, sys_key, value)
+                key_without_system = (resource_key, "", value)
+                index.setdefault(key_with_system, resource_id)
+                index.setdefault(key_without_system, resource_id)
+
+    if not index:
+        print("Warning: no identifiers discovered while preprocessing; reference fixing may be limited.")
+
+    return index, canonical_types
+
+
+def extract_identifier_values(identifier_field: object) -> Iterable[Tuple[str | None, str | None]]:
+    """Yield (system, value) pairs from an identifier attribute."""
+    if isinstance(identifier_field, dict):
+        yield identifier_field.get("system"), identifier_field.get("value")
+    elif isinstance(identifier_field, list):
+        for entry in identifier_field:
+            if isinstance(entry, dict):
+                yield entry.get("system"), entry.get("value")
+
+
+def preprocess_ndjson_files(
+    files: Sequence[Tuple[Path, str]],
+    staging_dir: Path,
+    identifier_index: Dict[IdentifierKey, str],
+    canonical_types: Dict[str, str],
+) -> Tuple[List[Tuple[Path, str]], int, int]:
+    """Rewrite conditional references and emit sanitized NDJSON files in staging_dir."""
+    processed: List[Tuple[Path, str]] = []
+    total_resolved = 0
+    total_unresolved = 0
+
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    for original_path, resource_type in files:
+        staged_path = staging_dir / original_path.name
+        resolved, unresolved = rewrite_ndjson_file(
+            original_path, staged_path, identifier_index, canonical_types
+        )
+        total_resolved += resolved
+        total_unresolved += unresolved
+        processed.append((staged_path, resource_type))
+
+    return processed, total_resolved, total_unresolved
+
+
+def rewrite_ndjson_file(
+    source_path: Path,
+    target_path: Path,
+    identifier_index: Dict[IdentifierKey, str],
+    canonical_types: Dict[str, str],
+) -> Tuple[int, int]:
+    """Rewrite a single NDJSON file, returning (resolved_refs, unresolved_refs)."""
+    resolved = 0
+    unresolved = 0
+
+    with source_path.open("r", encoding="utf-8") as reader, target_path.open("w", encoding="utf-8") as writer:
+        for line_number, line in enumerate(reader, start=1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                resource = json.loads(stripped)
+            except json.JSONDecodeError as exc:
+                sys.exit(f"Failed to parse JSON in {source_path} at line {line_number}: {exc}")
+
+            ref_resolved, ref_unresolved = rewrite_resource_references(resource, identifier_index, canonical_types)
+            resolved += ref_resolved
+            unresolved += ref_unresolved
+            writer.write(json.dumps(resource))
+            writer.write("\n")
+
+    return resolved, unresolved
+
+
+def rewrite_resource_references(
+    resource: Dict,
+    identifier_index: Dict[IdentifierKey, str],
+    canonical_types: Dict[str, str],
+) -> Tuple[int, int]:
+    """Walk a resource in-place, rewriting conditional references."""
+    resolved = 0
+    unresolved = 0
+
+    def _walk(node: object) -> None:
+        nonlocal resolved, unresolved
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "reference" and isinstance(value, str):
+                    new_value, did_resolve, attempted = rewrite_reference_value(value, identifier_index, canonical_types)
+                    if did_resolve:
+                        node[key] = new_value
+                        resolved += 1
+                    elif attempted:
+                        unresolved += 1
+                else:
+                    _walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    _walk(resource)
+    return resolved, unresolved
+
+
+def rewrite_reference_value(
+    reference: str,
+    identifier_index: Dict[IdentifierKey, str],
+    canonical_types: Dict[str, str],
+) -> Tuple[str, bool, bool]:
+    """Return (new_reference, resolved, attempted) for a reference string."""
+    parts = split_reference(reference)
+    if not parts:
+        return reference, False, False
+
+    resource_segment, query = parts
+    params = parse_qs(query, keep_blank_values=True)
+    identifiers = params.get("identifier")
+    if not identifiers:
+        return reference, False, False
+
+    token = identifiers[0]
+    if not token:
+        return reference, False, True
+
+    if "|" in token:
+        system, value = token.split("|", 1)
+    else:
+        system, value = "", token
+
+    resource_key = resource_segment.lower()
+    lookup_keys = [
+        (resource_key, system, value),
+        (resource_key, "", value) if system else None,
+    ]
+
+    target_id = None
+    for key in lookup_keys:
+        if key and key in identifier_index:
+            target_id = identifier_index[key]
+            break
+
+    if not target_id:
+        return reference, False, True
+
+    canonical_type = canonical_types.get(resource_key, resource_segment)
+    canonical_type = canonical_type.split("/")[-1]
+    return f"{canonical_type}/{target_id}", True, True
+
+
+def split_reference(reference: str) -> Tuple[str, str] | None:
+    """Split a reference into (resource_segment, query) if it contains a conditional search."""
+    if "?" not in reference:
+        return None
+
+    if reference.startswith(("http://", "https://")):
+        parsed = urlparse(reference)
+        resource_segment = parsed.path.rstrip("/").split("/")[-1]
+        query = parsed.query
+    else:
+        resource_part, query = reference.split("?", 1)
+        resource_segment = resource_part.rstrip("/").split("/")[-1]
+
+    if not resource_segment or not query:
+        return None
+    return resource_segment, query
+
+
 def infer_resource_type(file_path: Path) -> str:
     """Infer the FHIR resource type from the filename."""
     stem = file_path.stem
     resource_type = stem.split("_", maxsplit=1)[0]
-    # FHIR resource types are case-sensitive and must be capitalized
-    return resource_type.capitalize()
+    # Preserve casing from filenames such as MedicationRequest.ndjson
+    return resource_type
 
 
 def upload_files(
@@ -240,43 +465,73 @@ def poll_import_status(
 def main() -> None:
     load_dotenv()
     args = parse_args()
+    if args.skip_upload:
+        sys.exit("--skip-upload is not supported because preprocessing rewrites NDJSON locally before upload.")
     input_dir, container_url, fhir_url = validate_inputs(args)
-    files = discover_ndjson_files(input_dir, args.resource_types)
+    discovered_files = discover_ndjson_files(input_dir, args.resource_types)
+    identifier_index, canonical_types = collect_identifier_index(discovered_files)
 
-    prefix = args.prefix or f"synthea-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    with tempfile.TemporaryDirectory(prefix="synthea-preprocessed-") as tmpdir:
+        staging_dir = Path(tmpdir)
+        processed_files, resolved_refs, unresolved_refs = preprocess_ndjson_files(
+            discovered_files, staging_dir, identifier_index, canonical_types
+        )
+        print(
+            f"Preprocessed NDJSON files in {staging_dir}: resolved {resolved_refs} conditional references; "
+            f"{unresolved_refs} unresolved."
+        )
+        if unresolved_refs:
+            print(
+                "Warning: some conditional references could not be resolved; they remain unchanged and may fail import.",
+                file=sys.stderr,
+            )
 
-    # Check if container URL has SAS token (contains '?')
-    # If not, use managed identity for authentication
-    credential = DefaultAzureCredential(exclude_interactive_browser_credential=False)
-
-    if '?' in container_url:
-        print("Using SAS token authentication for blob storage")
-        container_client = ContainerClient.from_container_url(container_url)
-    else:
-        print("Using managed identity authentication for blob storage")
-        container_client = ContainerClient.from_container_url(
-            container_url,
-            credential=credential
+        base_files, dependent_files = partition_files_by_stage(processed_files)
+        print(
+            f"Discovered {len(base_files)} base resource files and {len(dependent_files)} dependent resource files."
         )
 
-    if args.skip_upload:
-        if not args.prefix:
-            sys.exit("--prefix is required when using --skip-upload to specify the blob folder.")
-        print(f"Skipping upload. Assuming {len(files)} NDJSON files exist in {container_url} under prefix '{prefix}'")
-        # Construct uploads list without actually uploading
-        uploads = [(local_path, f"{prefix}/{local_path.name}", resource_type)
-                   for local_path, resource_type in files]
-    else:
-        print(f"Uploading {len(files)} NDJSON files to {container_url} under prefix '{prefix}'")
-        uploads = upload_files(container_client, files, prefix)
+        prefix = args.prefix or f"synthea-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
 
-    status_url = trigger_import(credential, fhir_url, container_url, uploads)
+        # Check if container URL has SAS token (contains '?')
+        # If not, use managed identity for authentication
+        credential = DefaultAzureCredential(exclude_interactive_browser_credential=False)
 
-    if args.wait:
-        poll_import_status(credential, fhir_url,
-                           status_url, args.poll_interval)
-    else:
-        print("Run with --wait to poll import status automatically.")
+        if '?' in container_url:
+            print("Using SAS token authentication for blob storage")
+            container_client = ContainerClient.from_container_url(container_url)
+        else:
+            print("Using managed identity authentication for blob storage")
+            container_client = ContainerClient.from_container_url(
+                container_url,
+                credential=credential
+            )
+
+        total_files = len(processed_files)
+        print(f"Uploading {total_files} preprocessed NDJSON files to {container_url} under prefix '{prefix}'")
+        stage_one_uploads = upload_files(container_client, base_files, prefix)
+        stage_two_uploads = upload_files(container_client, dependent_files, prefix)
+
+        def run_stage(stage_name: str, uploads: Sequence[NdjsonUpload], wait_for_completion: bool) -> str | None:
+            if not uploads:
+                print(f"{stage_name}: no files to import; skipping.")
+                return None
+            print(f"{stage_name}: importing {len(uploads)} files.")
+            status = trigger_import(credential, fhir_url, container_url, uploads)
+            if wait_for_completion:
+                poll_import_status(credential, fhir_url, status, args.poll_interval)
+            else:
+                print("Run with --wait to poll import status automatically.")
+            return status
+
+        stage_one_status = run_stage("Stage 1 - base resources", stage_one_uploads, True)
+
+        if stage_one_status:
+            print("Stage 1 completed; proceeding to Stage 2 for dependent resources.")
+        else:
+            print("Stage 1 skipped. Continuing to Stage 2 (dependent resources).")
+
+        run_stage("Stage 2 - dependent resources", stage_two_uploads, args.wait)
 
 
 if __name__ == "__main__":

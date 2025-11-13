@@ -189,10 +189,6 @@ def determine_patient_id(
     return None
 
 
-def sanitize_patient_id(patient_id: str) -> str:
-    return "".join(char if char.isalnum() else "-" for char in patient_id)
-
-
 def convert_bundles_to_ndjson(bundle_dir: Path, ndjson_dir: Path, expected_patients: int) -> int:
     ndjson_dir.mkdir(parents=True, exist_ok=True)
     bundle_paths = sorted([p for p in bundle_dir.glob("**/*.json*") if p.is_file()])
@@ -205,34 +201,38 @@ def convert_bundles_to_ndjson(bundle_dir: Path, ndjson_dir: Path, expected_patie
 
     patient_lookup = build_patient_lookup(entries)
     patient_ids = set(patient_lookup.values())
-    patient_resources: Dict[str, List[Dict]] = defaultdict(list)
+    resource_groups: Dict[str, List[Dict]] = defaultdict(list)
     unassigned = 0
 
     for full_url, resource in entries:
+        resource_type = resource.get("resourceType") or "UnknownResource"
+        resource_groups[resource_type].append(resource)
         patient_id = determine_patient_id(full_url, resource, patient_lookup, patient_ids)
-        if patient_id:
-            patient_resources[patient_id].append(resource)
-        else:
+        if not patient_id:
             unassigned += 1
 
-    for index, (patient_id, resources) in enumerate(sorted(patient_resources.items()), start=1):
-        safe_id = sanitize_patient_id(patient_id)
-        out_path = ndjson_dir / f"patient_{index:03d}_{safe_id}.ndjson"
+    total_resources = 0
+    for resource_type in sorted(resource_groups):
+        resources = resource_groups[resource_type]
+        out_path = ndjson_dir / f"{resource_type}.ndjson"
         with out_path.open("w", encoding="utf-8") as fp:
             for resource in resources:
                 fp.write(json.dumps(resource))
                 fp.write("\n")
-        print(f"Wrote {len(resources):>5} resources for patient {patient_id} -> {out_path}")
+        total_resources += len(resources)
+        print(f"Wrote {len(resources):>5} {resource_type} resources -> {out_path}")
 
-    if expected_patients and len(patient_resources) != expected_patients:
+    patient_resources = resource_groups.get("Patient", [])
+    realized_patients = {res.get("id") for res in patient_resources if res.get("id")}
+    if expected_patients and len(realized_patients) != expected_patients:
         print(
-            f"Warning: expected {expected_patients} patients but grouped {len(patient_resources)} files.",
+            f"Warning: expected {expected_patients} Patient resources but found {len(realized_patients)}.",
             file=sys.stderr,
         )
     if unassigned:
         print(f"Warning: {unassigned} resources could not be linked to a patient.", file=sys.stderr)
 
-    return sum(len(resources) for resources in patient_resources.values())
+    return total_resources
 
 
 def main() -> None:
