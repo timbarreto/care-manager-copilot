@@ -171,6 +171,7 @@ def get_patient_resources(
         if response.status_code != 200:
             continue
         bundle = response.json()
+        new_entries = []
         for entry in bundle.get("entry", []):
             resource = entry.get("resource", {})
             res_id = resource.get("id")
@@ -178,8 +179,12 @@ def get_patient_resources(
                 continue
             if res_id:
                 seen_resource_ids.add(res_id)
-            combined_entries.append(entry)
-        if len(combined_entries) >= count:
+            new_entries.append(entry)
+            if len(combined_entries) + len(new_entries) >= count:
+                break
+        if new_entries:
+            combined_entries.extend(new_entries)
+            # Stop after the first search parameter that returns matches
             break
 
     if not combined_entries:
