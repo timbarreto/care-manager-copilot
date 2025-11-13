@@ -3,7 +3,7 @@
 Utility script to bulk-load Synthea FHIR NDJSON into an Azure FHIR workspace.
 
 Steps performed:
-1. Rewrite conditional references (e.g., `Patient?identifier=`) to fixed `ResourceType/id` links, deduplicate repeated records, and stage sanitized NDJSON files.
+1. Regenerate unique resource IDs, rewrite conditional references (e.g., `Patient?identifier=`) to fixed `ResourceType/id` links, deduplicate repeated records, and stage sanitized NDJSON files.
 2. Upload every staged *.ndjson file to a blob container.
 3. Trigger a first $import pass for base resources (Patient, Organization, Practitioner) and wait for completion.
 4. Trigger a second $import pass for dependent resources (Encounter, Observation, etc.) and optionally poll until completion.
@@ -28,6 +28,7 @@ from typing import Dict, Iterable, List, Sequence, Tuple
 from urllib.parse import parse_qs, urlparse
 
 import requests
+import secrets
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import ContainerClient
 from dotenv import load_dotenv
@@ -36,7 +37,10 @@ from azure.core.exceptions import ResourceExistsError, HttpResponseError
 
 NdjsonUpload = Tuple[Path, str, str]
 IdentifierKey = Tuple[str, str, str]
+IdRewriteKey = Tuple[str, str]
 BASE_RESOURCE_TYPES = {"patient", "organization", "practitioner"}
+ID_SUFFIX_LENGTH = 8
+FHIR_ID_MAX_LENGTH = 64
 
 
 def parse_args() -> argparse.Namespace:
@@ -126,6 +130,23 @@ def discover_ndjson_files(
     return files
 
 
+def generate_id_suffix() -> str:
+    """Create a short suffix appended to resource IDs to avoid duplicates."""
+    return secrets.token_hex(max(1, ID_SUFFIX_LENGTH // 2))
+
+
+def assign_new_resource_id(resource_type: str, original_id: str | None, suffix: str) -> str:
+    """Return a new FHIR id derived from the original plus a short suffix."""
+    base = (original_id or resource_type or "resource").strip()
+    candidate = f"{base}-{suffix}"
+    if len(candidate) <= FHIR_ID_MAX_LENGTH:
+        return candidate
+    trim_length = len(candidate) - FHIR_ID_MAX_LENGTH
+    truncated = base[:-trim_length] if trim_length < len(base) else base[: FHIR_ID_MAX_LENGTH - len(suffix) - 1]
+    truncated = truncated or base[: FHIR_ID_MAX_LENGTH - len(suffix) - 1]
+    return f"{truncated}-{suffix}"
+
+
 def partition_files_by_stage(files: Sequence[Tuple[Path, str]]) -> Tuple[List[Tuple[Path, str]], List[Tuple[Path, str]]]:
     """Split NDJSON files into base (stage 1) and dependent (stage 2) sets."""
     base_files: List[Tuple[Path, str]] = []
@@ -154,11 +175,13 @@ def iter_ndjson_resources(path: Path) -> Iterable[Dict]:
 
 
 def collect_identifier_index(
-    files: Sequence[Tuple[Path, str]]
-) -> Tuple[Dict[IdentifierKey, str], Dict[str, str]]:
-    """Build lookup tables for identifier->resource ID resolution."""
+    files: Sequence[Tuple[Path, str]],
+    id_suffix: str,
+) -> Tuple[Dict[IdentifierKey, str], Dict[str, str], Dict[IdRewriteKey, str]]:
+    """Build lookup tables for identifier->resource ID resolution and track ID rewrites."""
     index: Dict[IdentifierKey, str] = {}
     canonical_types: Dict[str, str] = {}
+    rewritten_ids: Dict[IdRewriteKey, str] = {}
 
     for file_path, fallback_type in files:
         for resource in iter_ndjson_resources(file_path):
@@ -168,11 +191,12 @@ def collect_identifier_index(
             resource_key = resource_type.lower()
             canonical_types.setdefault(resource_key, resource_type)
 
-            resource_id = resource.get("id")
-            if not resource_id:
-                continue
+            resource_id = (resource.get("id") or "").strip()
+            new_id = assign_new_resource_id(resource_type, resource_id or None, id_suffix)
+            rewritten_ids[(resource_key, resource_id or "")] = new_id
+
             # Allow matching purely by resource ID if references already conform.
-            index.setdefault((resource_key, "", resource_id), resource_id)
+            index.setdefault((resource_key, "", resource_id or new_id), new_id)
 
             for system, value in extract_identifier_values(resource.get("identifier")):
                 if not value:
@@ -180,13 +204,13 @@ def collect_identifier_index(
                 sys_key = system or ""
                 key_with_system = (resource_key, sys_key, value)
                 key_without_system = (resource_key, "", value)
-                index.setdefault(key_with_system, resource_id)
-                index.setdefault(key_without_system, resource_id)
+                index.setdefault(key_with_system, new_id)
+                index.setdefault(key_without_system, new_id)
 
     if not index:
         print("Warning: no identifiers discovered while preprocessing; reference fixing may be limited.")
 
-    return index, canonical_types
+    return index, canonical_types, rewritten_ids
 
 
 def extract_identifier_values(identifier_field: object) -> Iterable[Tuple[str | None, str | None]]:
@@ -204,6 +228,7 @@ def preprocess_ndjson_files(
     staging_dir: Path,
     identifier_index: Dict[IdentifierKey, str],
     canonical_types: Dict[str, str],
+    rewritten_ids: Dict[IdRewriteKey, str],
 ) -> Tuple[List[Tuple[Path, str]], int, int, int]:
     """Rewrite conditional references and emit sanitized NDJSON files in staging_dir."""
     processed: List[Tuple[Path, str]] = []
@@ -216,7 +241,7 @@ def preprocess_ndjson_files(
     for original_path, resource_type in files:
         staged_path = staging_dir / original_path.name
         resolved, unresolved, skipped = rewrite_ndjson_file(
-            original_path, staged_path, identifier_index, canonical_types, seen_ids
+            original_path, staged_path, identifier_index, canonical_types, rewritten_ids, seen_ids
         )
         total_resolved += resolved
         total_unresolved += unresolved
@@ -231,6 +256,7 @@ def rewrite_ndjson_file(
     target_path: Path,
     identifier_index: Dict[IdentifierKey, str],
     canonical_types: Dict[str, str],
+    rewritten_ids: Dict[IdRewriteKey, str],
     seen_ids: Dict[str, set[str]],
 ) -> Tuple[int, int, int]:
     """Rewrite a single NDJSON file, returning (resolved_refs, unresolved_refs, skipped_duplicates)."""
@@ -248,8 +274,17 @@ def rewrite_ndjson_file(
             except json.JSONDecodeError as exc:
                 sys.exit(f"Failed to parse JSON in {source_path} at line {line_number}: {exc}")
 
-            resource_type = (resource.get("resourceType") or "").strip().lower()
+            resource_type_raw = (resource.get("resourceType") or "").strip()
+            resource_type = resource_type_raw.lower()
             resource_id = (resource.get("id") or "").strip()
+            if resource_type:
+                new_id = rewritten_ids.get((resource_type, resource_id))
+                if not resource_id:
+                    new_id = new_id or rewritten_ids.get((resource_type, ""))
+                if new_id and new_id != resource_id:
+                    resource["id"] = new_id
+                    resource_id = new_id
+
             if resource_type and resource_id:
                 seen = seen_ids.setdefault(resource_type, set())
                 if resource_id in seen:
@@ -257,7 +292,9 @@ def rewrite_ndjson_file(
                     continue
                 seen.add(resource_id)
 
-            ref_resolved, ref_unresolved = rewrite_resource_references(resource, identifier_index, canonical_types)
+            ref_resolved, ref_unresolved = rewrite_resource_references(
+                resource, identifier_index, canonical_types, rewritten_ids
+            )
             resolved += ref_resolved
             unresolved += ref_unresolved
             writer.write(json.dumps(resource))
@@ -270,6 +307,7 @@ def rewrite_resource_references(
     resource: Dict,
     identifier_index: Dict[IdentifierKey, str],
     canonical_types: Dict[str, str],
+    rewritten_ids: Dict[IdRewriteKey, str],
 ) -> Tuple[int, int]:
     """Walk a resource in-place, rewriting conditional references."""
     resolved = 0
@@ -280,7 +318,9 @@ def rewrite_resource_references(
         if isinstance(node, dict):
             for key, value in node.items():
                 if key == "reference" and isinstance(value, str):
-                    new_value, did_resolve, attempted = rewrite_reference_value(value, identifier_index, canonical_types)
+                    new_value, did_resolve, attempted = rewrite_reference_value(
+                        value, identifier_index, canonical_types, rewritten_ids
+                    )
                     if did_resolve:
                         node[key] = new_value
                         resolved += 1
@@ -300,8 +340,14 @@ def rewrite_reference_value(
     reference: str,
     identifier_index: Dict[IdentifierKey, str],
     canonical_types: Dict[str, str],
+    rewritten_ids: Dict[IdRewriteKey, str],
 ) -> Tuple[str, bool, bool]:
     """Return (new_reference, resolved, attempted) for a reference string."""
+    direct = rewrite_direct_reference(reference, canonical_types, rewritten_ids)
+    if direct is not None:
+        new_value, changed = direct
+        return new_value, changed, changed
+
     parts = split_reference(reference)
     if not parts:
         return reference, False, False
@@ -357,6 +403,39 @@ def split_reference(reference: str) -> Tuple[str, str] | None:
     if not resource_segment or not query:
         return None
     return resource_segment, query
+
+
+def rewrite_direct_reference(
+    reference: str,
+    canonical_types: Dict[str, str],
+    rewritten_ids: Dict[IdRewriteKey, str],
+) -> Tuple[str, bool] | None:
+    """Handle direct references like ResourceType/id or absolute URLs."""
+    if "?" in reference:
+        return None
+
+    resource_segment = ""
+    resource_id = ""
+
+    if reference.startswith(("http://", "https://")):
+        parsed = urlparse(reference)
+        segments = [segment for segment in parsed.path.split("/") if segment]
+        if len(segments) >= 2:
+            resource_segment, resource_id = segments[-2], segments[-1]
+    elif "/" in reference:
+        resource_segment, resource_id = reference.split("/", 1)
+
+    if not resource_segment or not resource_id:
+        return None
+
+    resource_key = resource_segment.lower()
+    translated = rewritten_ids.get((resource_key, resource_id))
+    if not translated:
+        return None
+
+    canonical = canonical_types.get(resource_key, resource_segment).split("/")[-1]
+    new_reference = f"{canonical}/{translated}"
+    return new_reference, new_reference != reference
 
 
 def infer_resource_type(file_path: Path) -> str:
@@ -498,12 +577,13 @@ def main() -> None:
         sys.exit("--skip-upload is not supported because preprocessing rewrites NDJSON locally before upload.")
     input_dir, container_url, fhir_url = validate_inputs(args)
     discovered_files = discover_ndjson_files(input_dir, args.resource_types)
-    identifier_index, canonical_types = collect_identifier_index(discovered_files)
+    id_suffix = generate_id_suffix()
+    identifier_index, canonical_types, rewritten_ids = collect_identifier_index(discovered_files, id_suffix)
 
     with tempfile.TemporaryDirectory(prefix="synthea-preprocessed-") as tmpdir:
         staging_dir = Path(tmpdir)
         processed_files, resolved_refs, unresolved_refs, skipped_dupes = preprocess_ndjson_files(
-            discovered_files, staging_dir, identifier_index, canonical_types
+            discovered_files, staging_dir, identifier_index, canonical_types, rewritten_ids
         )
         print(
             f"Preprocessed NDJSON files in {staging_dir}: resolved {resolved_refs} conditional references; "
