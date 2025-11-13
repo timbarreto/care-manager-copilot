@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Deploy the Care Manager Copilot app to Azure App Service using settings from .env
+# Deploy the Care Manager Copilot app code to Azure App Service
+# Run scripts/setup_infrastructure.sh first if this is a new deployment
 
 SCRIPT_DIR="$(cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
@@ -29,6 +30,7 @@ command -v az >/dev/null 2>&1 || {
 DIST_DIR="${REPO_ROOT}/dist"
 ZIP_PATH="${DIST_DIR}/care-manager-copilot.zip"
 
+echo "Packaging application..."
 rm -rf "${ZIP_PATH}" "${DIST_DIR}"
 mkdir -p "${DIST_DIR}"
 
@@ -42,83 +44,17 @@ zip -r "${ZIP_PATH}" \
     .env.template >/dev/null
 popd >/dev/null
 
+echo "Package created: ${ZIP_PATH}"
+
 az account set --subscription "${SUBSCRIPTION_ID}"
 
-echo "Enabling managed identity for ${WEB_APP}..."
-az webapp identity assign \
-    --resource-group "${RESOURCE_GROUP}" \
-    --name "${WEB_APP}" >/dev/null
-
-PRINCIPAL_ID=$(az webapp identity show \
-    --resource-group "${RESOURCE_GROUP}" \
-    --name "${WEB_APP}" \
-    --query principalId -o tsv)
-
-echo "Managed identity enabled. Principal ID: ${PRINCIPAL_ID}"
-
-if [[ -n "${AZURE_KEY_VAULT}" ]]; then
-    echo "Granting Key Vault access to managed identity..."
-
-    # Get Key Vault resource ID
-    KV_ID=$(az keyvault show --name "${AZURE_KEY_VAULT}" --query id -o tsv)
-
-    # Assign Key Vault Secrets User role (RBAC)
-    az role assignment create \
-        --role "Key Vault Secrets User" \
-        --assignee-object-id "${PRINCIPAL_ID}" \
-        --assignee-principal-type ServicePrincipal \
-        --scope "${KV_ID}" 2>/dev/null || echo "Role already assigned or using access policies."
-
-    echo "Key Vault access configured."
-fi
-
-if [[ -n "${FHIR_RESOURCE_GROUP}" && -n "${FHIR_WORKSPACE_NAME}" && -n "${FHIR_SERVICE_NAME}" ]]; then
-    echo "Granting FHIR Data Contributor access to managed identity..."
-
-    # Get FHIR service resource ID
-    FHIR_ID=$(az healthcareapis workspace fhir-service show \
-        --resource-group "${FHIR_RESOURCE_GROUP}" \
-        --workspace-name "${FHIR_WORKSPACE_NAME}" \
-        --fhir-service-name "${FHIR_SERVICE_NAME}" \
-        --query id -o tsv)
-
-    # Assign FHIR Data Contributor role
-    az role assignment create \
-        --role "FHIR Data Contributor" \
-        --assignee-object-id "${PRINCIPAL_ID}" \
-        --assignee-principal-type ServicePrincipal \
-        --scope "${FHIR_ID}" 2>/dev/null || echo "Role already assigned."
-
-    echo "FHIR Data Contributor role configured."
-fi
-
-echo "Configuring app settings..."
-az webapp config appsettings set \
-    --resource-group "${RESOURCE_GROUP}" \
-    --name "${WEB_APP}" \
-    --settings \
-        SCM_DO_BUILD_DURING_DEPLOYMENT=true \
-        FHIR_URL="${FHIR_URL}" \
-        FHIR_RESOURCE_GROUP="${FHIR_RESOURCE_GROUP}" \
-        FHIR_WORKSPACE_NAME="${FHIR_WORKSPACE_NAME}" \
-        FHIR_SERVICE_NAME="${FHIR_SERVICE_NAME}" \
-        AOAI_ENDPOINT="${AOAI_ENDPOINT}" \
-        AOAI_DEPLOYMENT="${AOAI_DEPLOYMENT}" \
-        AOAI_API_KEY_NAME="${AOAI_API_KEY_NAME}" \
-        AZURE_KEY_VAULT="${AZURE_KEY_VAULT}" \
-        AZURE_TENANT_ID="${AZURE_TENANT_ID}" >/dev/null
-
-echo "App settings configured."
-
-az webapp config set \
-    --resource-group "${RESOURCE_GROUP}" \
-    --name "${WEB_APP}" \
-    --startup-file "python app.py" >/dev/null
-
+echo "Deploying to ${WEB_APP}..."
 az webapp deploy \
     --resource-group "${RESOURCE_GROUP}" \
     --name "${WEB_APP}" \
     --src-path "${ZIP_PATH}" \
     --type zip
 
-echo "Deployment completed. Package: ${ZIP_PATH}"
+echo ""
+echo "Deployment completed successfully!"
+echo "App URL: https://$(az webapp show --name ${WEB_APP} --resource-group ${RESOURCE_GROUP} --query defaultHostName -o tsv)"
