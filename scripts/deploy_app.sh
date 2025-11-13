@@ -53,8 +53,14 @@ az webapp deploy \
     --resource-group "${RESOURCE_GROUP}" \
     --name "${WEB_APP}" \
     --src-path "${ZIP_PATH}" \
-    --type zip
+    --type zip \
+    --async
 
 echo ""
-echo "Deployment completed successfully!"
+echo "Deployment initiated successfully!"
+echo "The deployment is running asynchronously in the background."
+echo ""
 echo "App URL: https://$(az webapp show --name ${WEB_APP} --resource-group ${RESOURCE_GROUP} --query defaultHostName -o tsv)"
+echo ""
+echo "To monitor deployment logs, run:"
+echo "  az webapp log tail --name ${WEB_APP} --resource-group ${RESOURCE_GROUP}"
