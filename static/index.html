@@ -99,7 +99,7 @@
 
         .workspace {
             display: grid;
-            grid-template-columns: minmax(320px, 38%) 1fr;
+            grid-template-columns: minmax(33.33%, 38%) 1fr;
             gap: 24px;
             align-items: start;
         }
@@ -109,6 +109,7 @@
             border-radius: 18px;
             padding: 24px;
             box-shadow: 0 25px 60px rgba(15, 53, 84, 0.08);
+            min-width: 0;
         }
 
         .panel-header {
@@ -173,6 +174,7 @@
             border: 1px solid var(--gray-200);
             border-radius: 16px;
             overflow: hidden;
+            min-height: 520px;
             max-height: 520px;
             overflow-y: auto;
         }
@@ -224,16 +226,17 @@
             border: 1px dashed var(--gray-200);
             border-radius: 16px;
             background: var(--gray-50);
-            min-height: 480px;
+            min-height: 520px;
             max-height: 520px;
             padding: 0;
             display: flex;
             flex-direction: column;
+            overflow: hidden;
         }
 
         .briefing-body {
             flex: 1;
-            padding: 24px;
+            padding: 0 24px 24px 24px;
             overflow-y: auto;
             white-space: pre-wrap;
             line-height: 1.6;
@@ -283,6 +286,7 @@
             gap: 12px;
             color: var(--gray-400);
             font-size: 15px;
+            padding-top: 24px;
         }
 
         .empty-state svg {
@@ -300,6 +304,7 @@
             align-items: center;
             justify-content: center;
             color: var(--blue-700);
+            padding-top: 24px;
         }
 
         .spinner {
@@ -396,7 +401,7 @@
             <article class="panel briefing-panel">
                 <div class="panel-header">
                     <div>
-                        <h2 id="briefingHeader">Select a patient</h2>
+                        <h2 id="briefingHeader">Patient Details</h2>
                         <p id="briefingMeta" class="briefing-meta">Briefings include overview, risks, next-best actions, and bilingual script.</p>
                         <p id="briefingStatus" class="briefing-status-line">
                             <span id="statusSpinner" class="status-spinner" aria-hidden="true"></span>
@@ -406,7 +411,7 @@
                 </div>
                 <div class="briefing-window">
                     <div class="tab-list" role="tablist" aria-label="Briefing views">
-                        <button id="tabFhir" class="tab-button active" role="tab" aria-selected="true">FHIR data</button>
+                        <button id="tabFhir" class="tab-button active" role="tab" aria-selected="true">FHIR Data</button>
                         <button id="tabBriefing" class="tab-button" role="tab" aria-selected="false">Briefing</button>
                     </div>
                     <div id="fhirPanel" class="tab-panel briefing-body empty-state" role="tabpanel" aria-labelledby="tabFhir">
