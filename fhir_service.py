@@ -131,7 +131,8 @@ class FHIRCareManagerService:
                 "patient_id": patient_id,
                 "success": True,
                 "briefing": briefing,
-                "bundle_entry_count": len(bundle.get("entry", []))
+                "bundle_entry_count": len(bundle.get("entry", [])),
+                "bundle": bundle
             }
         except Exception as e:
             return {

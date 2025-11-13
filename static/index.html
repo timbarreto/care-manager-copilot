@@ -140,6 +140,24 @@
             margin-top: 4px;
             color: var(--blue-700);
             font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 18px;
+        }
+
+        .status-spinner {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            border: 2px solid rgba(28, 135, 199, 0.2);
+            border-top-color: #1c87c7;
+            animation: spin 0.9s linear infinite;
+            display: none;
+        }
+
+        .status-spinner.active {
+            display: inline-block;
         }
 
         .tag {
@@ -223,12 +241,15 @@
 
         .tab-list {
             display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+            padding: 0 24px;
             border-bottom: 1px solid var(--gray-200);
         }
 
         .tab-button {
-            flex: 1;
-            padding: 14px;
+            flex: 0 0 auto;
+            padding: 12px 18px;
             font-size: 14px;
             font-weight: 600;
             background: transparent;
@@ -313,6 +334,12 @@
             margin-bottom: 12px;
         }
 
+        .fhir-panel-inner {
+            width: 100%;
+            max-width: 780px;
+            margin: 0 auto;
+        }
+
         @keyframes spin {
             from { transform: rotate(0deg); }
             to { transform: rotate(360deg); }
@@ -377,7 +404,10 @@
                     <div>
                         <h2 id="briefingHeader">Select a patient</h2>
                         <p id="briefingMeta" class="briefing-meta">Briefings include overview, risks, next-best actions, and bilingual script.</p>
-                        <p id="briefingStatus" class="briefing-status-line"></p>
+                        <p id="briefingStatus" class="briefing-status-line">
+                            <span id="statusSpinner" class="status-spinner" aria-hidden="true"></span>
+                            <span id="statusMessage"></span>
+                        </p>
                     </div>
                 </div>
                 <div class="briefing-window">
@@ -410,9 +440,12 @@
         const refreshBtn = document.getElementById('refreshRosterBtn');
         const briefingHeader = document.getElementById('briefingHeader');
         const briefingStatus = document.getElementById('briefingStatus');
+        const statusSpinner = document.getElementById('statusSpinner');
+        const statusMessage = document.getElementById('statusMessage');
         const briefingMeta = document.getElementById('briefingMeta');
         const fhirPanel = document.getElementById('fhirPanel');
         const briefingPanel = document.getElementById('briefingPanel');
+        const briefingBody = briefingPanel; // legacy alias used by older helpers
         const tabButtons = {
             fhir: document.getElementById('tabFhir'),
             briefing: document.getElementById('tabBriefing')
@@ -460,6 +493,17 @@
                     panel.classList.toggle('hidden', key !== tab);
                 }
             });
+        }
+
+        function updateBriefingStatus(message, options = {}) {
+            const loading = Boolean(options.loading);
+            if (statusMessage) {
+                statusMessage.textContent = message || '';
+            }
+            if (statusSpinner) {
+                statusSpinner.classList.toggle('active', loading);
+                statusSpinner.setAttribute('aria-hidden', loading ? 'false' : 'true');
+            }
         }
 
         function setPanel(panel, variantClass, content) {
@@ -512,8 +556,10 @@
             hasFhirData = true;
             const truncatedJson = JSON.stringify(bundle, null, 2) || '{}';
             setPanel(fhirPanel, '', `
-                <div class="fhir-summary">Showing ${entryCount} FHIR resources.</div>
-                <pre class="code-block">${escapeHtml(truncatedJson)}</pre>
+                <div class="fhir-panel-inner">
+                    <div class="fhir-summary">Showing ${entryCount} FHIR resources.</div>
+                    <pre class="code-block">${escapeHtml(truncatedJson)}</pre>
+                </div>
             `);
         }
 
@@ -631,7 +677,7 @@
             stopBriefingStream();
             briefingHeader.textContent = 'Select a patient';
             briefingMeta.textContent = 'Briefings include overview, risks, next-best actions, and bilingual script.';
-            briefingStatus.textContent = '';
+            updateBriefingStatus('');
             setActiveTab('fhir');
             showFhirPlaceholder();
             showBriefingPlaceholder();
@@ -671,7 +717,7 @@
             }
 
             const streamUrl = `/api/patient/${encodeURIComponent(patientId)}/brief/stream`;
-            briefingStatus.textContent = `Querying FHIR for patient ${patientId}...`;
+            updateBriefingStatus(`Querying FHIR for patient ${patientId}...`, { loading: true });
 
             briefingStream = new EventSource(streamUrl);
             let completed = false;
@@ -681,7 +727,7 @@
                     const payload = JSON.parse(event.data);
                     renderFhirData(payload.bundle, payload.bundle_entry_count || 0);
                     if (payload.message) {
-                        briefingStatus.textContent = payload.message;
+                        updateBriefingStatus(payload.message, { loading: true });
                     }
                 } catch (err) {
                     console.error('Failed to parse fhir_data event', err);
@@ -692,7 +738,7 @@
                 try {
                     const payload = JSON.parse(event.data);
                     if (payload.message) {
-                        briefingStatus.textContent = payload.message;
+                        updateBriefingStatus(payload.message, { loading: true });
                     }
                 } catch (err) {
                     console.error('Failed to parse status event', err);
@@ -704,7 +750,7 @@
                 try {
                     const payload = JSON.parse(event.data);
                     renderBriefingContent(payload.briefing);
-                    briefingStatus.textContent = `Briefing ready · ${payload.bundle_entry_count || 0} FHIR entries analyzed`;
+                    updateBriefingStatus(`Briefing ready · ${payload.bundle_entry_count || 0} FHIR entries analyzed`, { loading: false });
                     setActiveTab('briefing');
                 } catch (err) {
                     handleBriefingError('Unable to parse briefing content.', { preserveFhir: hasFhirData });
@@ -735,7 +781,7 @@
         }
 
         async function loadBriefingFallback(patientId) {
-            briefingStatus.textContent = `Generating briefing for patient ${patientId}...`;
+            updateBriefingStatus(`Generating briefing for patient ${patientId}...`, { loading: true });
             try {
                 const response = await fetch(`/api/patient/${encodeURIComponent(patientId)}/brief`);
                 const data = await response.json();
@@ -746,7 +792,7 @@
 
                 renderFhirData(data.bundle, data.bundle_entry_count || 0);
                 renderBriefingContent(data.briefing);
-                briefingStatus.textContent = `Briefing ready · ${data.bundle_entry_count || 0} FHIR entries analyzed`;
+                updateBriefingStatus(`Briefing ready · ${data.bundle_entry_count || 0} FHIR entries analyzed`, { loading: false });
                 setActiveTab('briefing');
             } catch (error) {
                 handleBriefingError(error.message, { preserveFhir: hasFhirData });
@@ -760,7 +806,7 @@
                 hasFhirData = false;
             }
             setPanelError(briefingPanel, message);
-            briefingStatus.textContent = message;
+            updateBriefingStatus(message, { loading: false });
             setActiveTab('fhir');
         }
     </script>

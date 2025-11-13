@@ -124,6 +124,14 @@ def stream_patient_brief(patient_id):
             bundle = service.fetch_patient_bundle(patient_id)
             entry_count = len(bundle.get("entry", []))
 
+            yield _sse_event('fhir_data', {
+                "stage": "fhir",
+                "message": f"FHIR sync returned {entry_count} resources.",
+                "patient_id": patient_id,
+                "bundle_entry_count": entry_count,
+                "bundle": bundle
+            })
+
             yield _sse_event('status', {
                 "stage": "prompt",
                 "message": f"FHIR sync returned {entry_count} resources. Preparing Azure OpenAI prompt..."
