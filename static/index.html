@@ -509,22 +509,22 @@
                 </div>
                 <div class="briefing-window">
                     <div class="tab-list" role="tablist" aria-label="Briefing views">
-                        <button id="tabFhir" class="tab-button active" role="tab" aria-selected="true">FHIR Data</button>
-                        <button id="tabBriefing" class="tab-button" role="tab" aria-selected="false">Briefing</button>
+                        <button id="tabBriefing" class="tab-button active" role="tab" aria-selected="true">Briefing</button>
+                        <button id="tabFhir" class="tab-button" role="tab" aria-selected="false">FHIR Data</button>
                     </div>
-                    <div id="fhirPanel" class="tab-panel briefing-body empty-state" role="tabpanel" aria-labelledby="tabFhir">
-                        <svg viewBox="0 0 64 64" aria-hidden="true">
-                            <circle cx="32" cy="32" r="25"></circle>
-                            <path d="M20 26h24M20 34h24M20 42h16"></path>
-                        </svg>
-                        <p>Select a patient to view their underlying FHIR bundle.</p>
-                    </div>
-                    <div id="briefingPanel" class="tab-panel briefing-body empty-state hidden" role="tabpanel" aria-labelledby="tabBriefing">
+                    <div id="briefingPanel" class="tab-panel briefing-body empty-state" role="tabpanel" aria-labelledby="tabBriefing">
                         <svg viewBox="0 0 64 64" aria-hidden="true">
                             <circle cx="32" cy="32" r="25"></circle>
                             <path d="M20 26h24M20 34h24M20 42h16"></path>
                         </svg>
                         <p>Your AI-generated briefing will display here once summarization completes.</p>
+                    </div>
+                    <div id="fhirPanel" class="tab-panel briefing-body empty-state hidden" role="tabpanel" aria-labelledby="tabFhir">
+                        <svg viewBox="0 0 64 64" aria-hidden="true">
+                            <circle cx="32" cy="32" r="25"></circle>
+                            <path d="M20 26h24M20 34h24M20 42h16"></path>
+                        </svg>
+                        <p>Select a patient to view their underlying FHIR bundle.</p>
                     </div>
                 </div>
             </article>
@@ -544,12 +544,12 @@
         const briefingPanel = document.getElementById('briefingPanel');
         const briefingBody = briefingPanel; // legacy alias used by older helpers
         const tabButtons = {
-            fhir: document.getElementById('tabFhir'),
-            briefing: document.getElementById('tabBriefing')
+            briefing: document.getElementById('tabBriefing'),
+            fhir: document.getElementById('tabFhir')
         };
         const tabPanels = {
-            fhir: fhirPanel,
-            briefing: briefingPanel
+            briefing: briefingPanel,
+            fhir: fhirPanel
         };
         const emptyStateIcon = `
             <svg viewBox="0 0 64 64" aria-hidden="true">
@@ -559,7 +559,7 @@
         let rosterData = [];
         let selectedPatientId = null;
         let briefingStream = null;
-        let activeTab = 'fhir';
+        let activeTab = 'briefing';
         let hasFhirData = false;
 
         document.addEventListener('DOMContentLoaded', () => {
@@ -787,7 +787,7 @@
             briefingHeader.textContent = 'Select a patient';
             briefingMeta.textContent = 'Briefings include overview, risks, next-best actions, and bilingual script.';
             updateBriefingStatus('');
-            setActiveTab('fhir');
+            setActiveTab('briefing');
             showFhirPlaceholder();
             showBriefingPlaceholder();
         }
@@ -803,7 +803,6 @@
             briefingHeader.textContent = patient.name || 'Patient briefing';
             briefingMeta.textContent = `DOB ${formatDate(patient.birth_date)} · ${patient.gender || 'Gender not listed'}`;
 
-            setActiveTab('fhir');
             showFhirLoading();
             showBriefingWaiting();
 
@@ -916,7 +915,7 @@
             }
             setPanelError(briefingPanel, message);
             updateBriefingStatus(message, { loading: false });
-            setActiveTab('fhir');
+            // Stay on current tab to show the error where user is looking
         }
     </script>
 </body>
