@@ -72,6 +72,26 @@ if [[ -n "${AZURE_KEY_VAULT}" ]]; then
     echo "Key Vault access configured."
 fi
 
+if [[ -n "${FHIR_RESOURCE_GROUP}" && -n "${FHIR_WORKSPACE_NAME}" && -n "${FHIR_SERVICE_NAME}" ]]; then
+    echo "Granting FHIR Data Contributor access to managed identity..."
+
+    # Get FHIR service resource ID
+    FHIR_ID=$(az healthcareapis workspace fhir-service show \
+        --resource-group "${FHIR_RESOURCE_GROUP}" \
+        --workspace-name "${FHIR_WORKSPACE_NAME}" \
+        --fhir-service-name "${FHIR_SERVICE_NAME}" \
+        --query id -o tsv)
+
+    # Assign FHIR Data Contributor role
+    az role assignment create \
+        --role "FHIR Data Contributor" \
+        --assignee-object-id "${PRINCIPAL_ID}" \
+        --assignee-principal-type ServicePrincipal \
+        --scope "${FHIR_ID}" 2>/dev/null || echo "Role already assigned."
+
+    echo "FHIR Data Contributor role configured."
+fi
+
 echo "Configuring app settings..."
 az webapp config appsettings set \
     --resource-group "${RESOURCE_GROUP}" \
@@ -79,6 +99,9 @@ az webapp config appsettings set \
     --settings \
         SCM_DO_BUILD_DURING_DEPLOYMENT=true \
         FHIR_URL="${FHIR_URL}" \
+        FHIR_RESOURCE_GROUP="${FHIR_RESOURCE_GROUP}" \
+        FHIR_WORKSPACE_NAME="${FHIR_WORKSPACE_NAME}" \
+        FHIR_SERVICE_NAME="${FHIR_SERVICE_NAME}" \
         AOAI_ENDPOINT="${AOAI_ENDPOINT}" \
         AOAI_DEPLOYMENT="${AOAI_DEPLOYMENT}" \
         AOAI_API_KEY_NAME="${AOAI_API_KEY_NAME}" \
