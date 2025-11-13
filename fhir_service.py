@@ -8,7 +8,7 @@ and uses Azure OpenAI to generate care manager briefings.
 import os
 import json
 import requests
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 from azure.identity import DefaultAzureCredential
 from openai import AzureOpenAI
 
@@ -139,3 +139,56 @@ class FHIRCareManagerService:
                 "success": False,
                 "error": str(e)
             }
+
+    def list_patients(self, limit: int = 25) -> List[Dict[str, Optional[str]]]:
+        """
+        Retrieve a roster of patients with name and date of birth for quick selection.
+
+        Args:
+            limit: Maximum number of patients to return.
+
+        Returns:
+            A list of patient dictionaries containing id, name, birth_date, and gender.
+        """
+        # Get Entra ID token for FHIR
+        token = self.credential.get_token(f"{self.fhir_url}/.default").token
+
+        # Basic roster query
+        url = f"{self.fhir_url}/Patient?_count={limit}&_sort=name"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/fhir+json"
+        }
+
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+        bundle = response.json()
+
+        roster: List[Dict[str, Optional[str]]] = []
+        for entry in bundle.get("entry", []):
+            resource = entry.get("resource", {})
+            patient_id = resource.get("id")
+
+            name = self._format_patient_name(resource.get("name", []))
+            roster.append({
+                "patient_id": patient_id,
+                "name": name or "Unnamed patient",
+                "birth_date": resource.get("birthDate"),
+                "gender": resource.get("gender")
+            })
+
+        return roster
+
+    @staticmethod
+    def _format_patient_name(name_entries: List[Dict[str, Any]]) -> Optional[str]:
+        """Compose a readable patient name from FHIR Person.name entries."""
+        if not name_entries:
+            return None
+
+        primary = name_entries[0]
+        given = " ".join(primary.get("given", [])).strip()
+        family = primary.get("family", "").strip()
+
+        if given and family:
+            return f"{given} {family}"
+        return given or family or None

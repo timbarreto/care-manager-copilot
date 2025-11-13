@@ -3,8 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Care Manager Copilot - FHIR Demo</title>
+    <title>Care Manager Copilot</title>
     <style>
+        :root {
+            --blue-900: #0f3554;
+            --blue-700: #1666a3;
+            --blue-100: #e3f2fd;
+            --teal-50: #e6fffa;
+            --gray-50: #f7f9fc;
+            --gray-200: #dfe7f0;
+            --gray-400: #9aa6bf;
+        }
+
         * {
             margin: 0;
             padding: 0;
@@ -13,234 +23,452 @@
 
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: radial-gradient(circle at top, #f0f5ff, #e0edf5, #f7fafc);
             min-height: 100vh;
+            padding: 32px;
+            color: #1f2a37;
+        }
+
+        .app-shell {
+            max-width: 1200px;
+            margin: 0 auto;
             display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
+            flex-direction: column;
+            gap: 24px;
         }
 
-        .container {
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-            max-width: 800px;
-            width: 100%;
-            padding: 30px;
+        .top-bar {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: flex-end;
+            gap: 16px;
         }
 
-        h1 {
-            color: #333;
-            margin-bottom: 10px;
-            font-size: 28px;
-        }
-
-        .subtitle {
-            color: #666;
-            margin-bottom: 30px;
-            font-size: 14px;
-        }
-
-        .input-section {
-            margin-bottom: 20px;
-        }
-
-        label {
-            display: block;
-            margin-bottom: 8px;
-            color: #444;
+        .top-bar .eyebrow {
+            text-transform: uppercase;
+            letter-spacing: 0.2em;
+            color: var(--blue-700);
+            font-size: 12px;
             font-weight: 600;
         }
 
-        .input-group {
+        h1 {
+            font-size: 32px;
+            color: var(--blue-900);
+        }
+
+        .top-actions {
             display: flex;
-            gap: 10px;
-        }
-
-        input[type="text"] {
-            flex: 1;
-            padding: 12px;
-            border: 2px solid #ddd;
-            border-radius: 6px;
-            font-size: 16px;
-            transition: border-color 0.3s;
-        }
-
-        input[type="text"]:focus {
-            outline: none;
-            border-color: #667eea;
+            align-items: center;
+            gap: 12px;
         }
 
         button {
-            padding: 12px 30px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
             border: none;
-            border-radius: 6px;
-            font-size: 16px;
+            border-radius: 24px;
+            padding: 12px 24px;
+            font-size: 14px;
             font-weight: 600;
             cursor: pointer;
             transition: transform 0.2s, box-shadow 0.2s;
         }
 
-        button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        button.primary {
+            background: linear-gradient(135deg, #1c87c7, #19b6a4);
+            color: white;
+            box-shadow: 0 10px 20px rgba(25, 150, 190, 0.2);
         }
 
-        button:active {
-            transform: translateY(0);
+        button.secondary {
+            background: white;
+            color: var(--blue-700);
+            border: 1px solid var(--gray-200);
         }
 
         button:disabled {
-            background: #ccc;
+            opacity: 0.6;
             cursor: not-allowed;
             transform: none;
+            box-shadow: none;
         }
 
-        .result-section {
-            margin-top: 30px;
-            display: none;
+        button:not(:disabled):hover {
+            transform: translateY(-2px);
         }
 
-        .result-section.active {
-            display: block;
+        .workspace {
+            display: grid;
+            grid-template-columns: minmax(320px, 38%) 1fr;
+            gap: 24px;
+            align-items: start;
         }
 
-        .result-box {
-            background: #f8f9fa;
-            border-left: 4px solid #667eea;
-            padding: 20px;
-            border-radius: 6px;
-            white-space: pre-wrap;
-            line-height: 1.6;
-            color: #333;
-            max-height: 600px;
+        .panel {
+            background: white;
+            border-radius: 18px;
+            padding: 24px;
+            box-shadow: 0 25px 60px rgba(15, 53, 84, 0.08);
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .panel-header h2 {
+            font-size: 20px;
+            color: var(--blue-900);
+            margin-bottom: 4px;
+        }
+
+        .panel-header p {
+            color: var(--gray-400);
+            font-size: 13px;
+        }
+
+        .tag {
+            background: var(--blue-100);
+            color: var(--blue-700);
+            padding: 6px 12px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .table-wrapper {
+            border: 1px solid var(--gray-200);
+            border-radius: 16px;
+            overflow: hidden;
+            max-height: 520px;
             overflow-y: auto;
         }
 
-        .error {
-            background: #fee;
-            border-left-color: #e74c3c;
-            color: #c0392b;
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
         }
 
-        .loading {
+        thead {
+            background: #f4f7fb;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+
+        th, td {
+            padding: 14px 16px;
+            text-align: left;
+        }
+
+        tbody tr {
+            cursor: pointer;
+            border-bottom: 1px solid #f0f4f8;
+            transition: background 0.2s;
+        }
+
+        tbody tr:hover {
+            background: var(--teal-50);
+        }
+
+        tbody tr.selected {
+            background: #dff7ff;
+            box-shadow: inset 3px 0 0 #1c87c7;
+        }
+
+        .patient-name {
+            font-weight: 600;
+            color: var(--blue-900);
+        }
+
+        .patient-meta {
+            font-size: 12px;
+            color: var(--gray-400);
+        }
+
+        .briefing-body {
+            min-height: 480px;
+            border: 1px dashed var(--gray-200);
+            border-radius: 16px;
+            padding: 24px;
+            background: var(--gray-50);
+            overflow-y: auto;
+            white-space: pre-wrap;
+            line-height: 1.6;
+        }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
             text-align: center;
-            padding: 40px;
-            color: #667eea;
+            gap: 12px;
+            color: var(--gray-400);
+            font-size: 15px;
+        }
+
+        .empty-state svg {
+            width: 64px;
+            height: 64px;
+            fill: none;
+            stroke: var(--gray-200);
+            stroke-width: 1.2px;
+        }
+
+        .loading-state {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            align-items: center;
+            justify-content: center;
+            color: var(--blue-700);
         }
 
         .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #667eea;
+            width: 46px;
+            height: 46px;
             border-radius: 50%;
-            width: 40px;
-            height: 40px;
+            border: 4px solid rgba(28, 135, 199, 0.15);
+            border-top-color: #1c87c7;
             animation: spin 1s linear infinite;
-            margin: 0 auto 20px;
+        }
+
+        .error-state {
+            color: #c0392b;
         }
 
         @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
         }
 
-        .info-box {
-            background: #e3f2fd;
-            border-left: 4px solid #2196f3;
-            padding: 15px;
-            border-radius: 6px;
-            margin-bottom: 20px;
-            font-size: 14px;
-            color: #1565c0;
-        }
+        @media (max-width: 960px) {
+            body {
+                padding: 16px;
+            }
 
-        .info-box strong {
-            display: block;
-            margin-bottom: 5px;
+            .workspace {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>Care Manager Copilot</h1>
-        <p class="subtitle">FHIR-based member briefing and outreach assistant</p>
-
-        <div class="info-box">
-            <strong>How to use:</strong>
-            Enter a synthetic patient/member ID below. The system will fetch FHIR data from Azure Health Data Services and generate a care manager briefing with next-best actions and bilingual call scripts.
-        </div>
-
-        <div class="input-section">
-            <label for="memberId">Member/Patient ID:</label>
-            <div class="input-group">
-                <input
-                    type="text"
-                    id="memberId"
-                    placeholder="e.g., patient-123 or a FHIR patient ID"
-                    autocomplete="off"
-                >
-                <button id="submitBtn" onclick="getBriefing()">Get Briefing</button>
+    <div class="app-shell">
+        <header class="top-bar">
+            <div>
+                <p class="eyebrow">Care Manager Copilot</p>
+                <h1>Care Team Command Center</h1>
+                <p style="color:#4f5c6b;margin-top:6px;">FHIR-powered roster with auto-generated outreach briefings.</p>
             </div>
-        </div>
+            <div class="top-actions">
+                <button id="refreshRosterBtn" class="secondary">Refresh roster</button>
+                <button class="primary">Start outreach</button>
+            </div>
+        </header>
 
-        <div id="resultSection" class="result-section">
-            <div id="resultBox" class="result-box"></div>
-        </div>
+        <section class="workspace">
+            <article class="panel patient-panel">
+                <div class="panel-header">
+                    <div>
+                        <h2>Patient Roster</h2>
+                        <p>Tap a row to pull the latest clinical briefing.</p>
+                    </div>
+                    <span class="tag" id="rosterCount">0 patients</span>
+                </div>
+                <div class="table-wrapper" id="rosterWrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Patient</th>
+                                <th>DOB</th>
+                                <th>Gender</th>
+                            </tr>
+                        </thead>
+                        <tbody id="patientTableBody">
+                            <tr>
+                                <td colspan="3" style="padding:24px; text-align:center; color: var(--gray-400);">
+                                    Loading roster...
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </article>
+
+            <article class="panel briefing-panel">
+                <div class="panel-header">
+                    <div>
+                        <h2 id="briefingHeader">Select a patient</h2>
+                        <p id="briefingStatus">Briefings include overview, risks, next-best actions, and bilingual script.</p>
+                    </div>
+                </div>
+                <div id="briefingBody" class="briefing-body empty-state">
+                    <svg viewBox="0 0 64 64" aria-hidden="true">
+                        <circle cx="32" cy="32" r="25"></circle>
+                        <path d="M20 26h24M20 34h24M20 42h16"></path>
+                    </svg>
+                    <p>Select a patient from the roster to generate a care manager briefing.</p>
+                </div>
+            </article>
+        </section>
     </div>
 
     <script>
-        const memberIdInput = document.getElementById('memberId');
-        const submitBtn = document.getElementById('submitBtn');
-        const resultSection = document.getElementById('resultSection');
-        const resultBox = document.getElementById('resultBox');
+        const patientTableBody = document.getElementById('patientTableBody');
+        const rosterCount = document.getElementById('rosterCount');
+        const refreshBtn = document.getElementById('refreshRosterBtn');
+        const briefingBody = document.getElementById('briefingBody');
+        const briefingHeader = document.getElementById('briefingHeader');
+        const briefingStatus = document.getElementById('briefingStatus');
+        let rosterData = [];
+        let selectedPatientId = null;
 
-        // Allow Enter key to submit
-        memberIdInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                getBriefing();
-            }
+        document.addEventListener('DOMContentLoaded', () => {
+            loadRoster();
         });
 
-        async function getBriefing() {
-            const memberId = memberIdInput.value.trim();
+        refreshBtn.addEventListener('click', () => {
+            loadRoster(true);
+        });
 
-            if (!memberId) {
-                alert('Please enter a member/patient ID');
+        function formatDate(dob) {
+            if (!dob) return '—';
+            const date = new Date(dob);
+            if (Number.isNaN(date.getTime())) return dob;
+            return date.toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric'
+            });
+        }
+
+        async function loadRoster(force = false) {
+            if (refreshBtn) {
+                refreshBtn.disabled = true;
+            }
+
+            patientTableBody.innerHTML = `
+                <tr><td colspan="3" style="padding:24px; text-align:center;">
+                    <div class="loading-state">
+                        <div class="spinner"></div>
+                        <span>Syncing with FHIR directory...</span>
+                    </div>
+                </td></tr>`;
+
+            try {
+                const response = await fetch('/api/patients?count=50');
+                const data = await response.json();
+
+                if (!data.success) {
+                    throw new Error(data.error || 'Unable to load roster');
+                }
+
+                rosterData = data.patients;
+                rosterCount.textContent = `${rosterData.length} patient${rosterData.length === 1 ? '' : 's'}`;
+                renderRoster();
+
+                if (force) {
+                    selectedPatientId = null;
+                    resetBriefingState();
+                }
+            } catch (error) {
+                patientTableBody.innerHTML = `
+                    <tr><td colspan="3" style="padding:24px; text-align:center;">
+                        <div class="empty-state error-state">
+                            <strong>Roster unavailable</strong>
+                            <span>${error.message}</span>
+                        </div>
+                    </td></tr>`;
+            } finally {
+                refreshBtn.disabled = false;
+            }
+        }
+
+        function renderRoster() {
+            if (!rosterData.length) {
+                patientTableBody.innerHTML = `
+                    <tr><td colspan="3" style="padding:24px; text-align:center; color: var(--gray-400);">
+                        No patients found. Verify FHIR connectivity.
+                    </td></tr>`;
                 return;
             }
 
-            // Show loading state
-            resultSection.classList.add('active');
-            resultBox.className = 'result-box';
-            resultBox.innerHTML = '<div class="loading"><div class="spinner"></div><p>Fetching FHIR data and generating briefing...</p></div>';
-            submitBtn.disabled = true;
+            patientTableBody.innerHTML = '';
 
+            rosterData.forEach((patient) => {
+                const row = document.createElement('tr');
+                row.dataset.patientId = patient.patient_id;
+                row.classList.toggle('selected', patient.patient_id === selectedPatientId);
+                row.innerHTML = `
+                    <td>
+                        <div class="patient-name">${patient.name || 'Unnamed patient'}</div>
+                        <div class="patient-meta">ID · ${patient.patient_id}</div>
+                    </td>
+                    <td>${formatDate(patient.birth_date)}</td>
+                    <td>${patient.gender ? patient.gender.charAt(0).toUpperCase() + patient.gender.slice(1) : '—'}</td>
+                `;
+
+                row.addEventListener('click', () => handlePatientSelection(patient));
+                patientTableBody.appendChild(row);
+            });
+        }
+
+        function resetBriefingState() {
+            briefingHeader.textContent = 'Select a patient';
+            briefingStatus.textContent = 'Briefings include overview, risks, next-best actions, and bilingual script.';
+            briefingBody.className = 'briefing-body empty-state';
+            briefingBody.innerHTML = `
+                <svg viewBox="0 0 64 64" aria-hidden="true">
+                    <circle cx="32" cy="32" r="25"></circle>
+                    <path d="M20 26h24M20 34h24M20 42h16"></path>
+                </svg>
+                <p>Select a patient from the roster to generate a care manager briefing.</p>
+            `;
+        }
+
+        function handlePatientSelection(patient) {
+            if (!patient || !patient.patient_id) return;
+            selectedPatientId = patient.patient_id;
+
+            document.querySelectorAll('#patientTableBody tr').forEach((row) => {
+                row.classList.toggle('selected', row.dataset.patientId === selectedPatientId);
+            });
+
+            briefingHeader.textContent = patient.name || 'Patient briefing';
+            briefingStatus.textContent = `DOB ${formatDate(patient.birth_date)} · ${patient.gender || 'Gender not listed'}`;
+
+            briefingBody.className = 'briefing-body loading-state';
+            briefingBody.innerHTML = `
+                <div class="spinner"></div>
+                <p>Gathering latest encounter notes, labs, and risk factors...</p>
+            `;
+
+            loadBriefing(patient.patient_id);
+        }
+
+        async function loadBriefing(patientId) {
             try {
-                const response = await fetch('/api/chat', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ member_id: memberId })
-                });
-
+                const response = await fetch(`/api/patient/${encodeURIComponent(patientId)}/brief`);
                 const data = await response.json();
 
-                if (data.success) {
-                    resultBox.className = 'result-box';
-                    resultBox.textContent = data.briefing;
-                } else {
-                    resultBox.className = 'result-box error';
-                    resultBox.textContent = `Error: ${data.error}`;
+                if (!data.success) {
+                    throw new Error(data.error || 'Unable to generate briefing');
                 }
+
+                briefingBody.className = 'briefing-body';
+                briefingBody.textContent = data.briefing;
             } catch (error) {
-                resultBox.className = 'result-box error';
-                resultBox.textContent = `Network error: ${error.message}`;
-            } finally {
-                submitBtn.disabled = false;
+                briefingBody.className = 'briefing-body empty-state error-state';
+                briefingBody.innerHTML = `
+                    <strong>Briefing unavailable</strong>
+                    <span>${error.message}</span>
+                `;
             }
         }
     </script>

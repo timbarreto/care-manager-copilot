@@ -101,6 +101,32 @@ def get_patient_brief(patient_id):
             "success": False,
             "error": str(e)
         }), 500
+
+
+@app.route('/api/patients', methods=['GET'])
+def list_patients():
+    """Return a roster of patients with demographics for the UI grid."""
+    try:
+        raw_limit = request.args.get('count', 25)
+        limit = max(1, min(100, int(raw_limit)))
+    except ValueError:
+        return jsonify({
+            "success": False,
+            "error": "count must be an integer"
+        }), 400
+
+    try:
+        service = get_fhir_service()
+        patients = service.list_patients(limit)
+        return jsonify({
+            "success": True,
+            "patients": patients
+        })
+    except RuntimeError as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
     except Exception as e:
         return jsonify({
             "success": False,
