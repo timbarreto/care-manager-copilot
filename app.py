@@ -5,7 +5,8 @@ Provides REST endpoints for the web chat interface.
 """
 
 import os
-from flask import Flask, request, jsonify, send_from_directory
+import json
+from flask import Flask, request, jsonify, send_from_directory, Response, stream_with_context
 from flask_cors import CORS
 from dotenv import load_dotenv
 from fhir_service import FHIRCareManagerService
@@ -65,6 +66,11 @@ def get_fhir_service():
     return fhir_service
 
 
+def _sse_event(event_name, payload):
+    """Serialize payload as an SSE event."""
+    return f"event: {event_name}\ndata: {json.dumps(payload)}\n\n"
+
+
 @app.route('/')
 def index():
     """Serve the main page."""
@@ -101,6 +107,51 @@ def get_patient_brief(patient_id):
             "success": False,
             "error": str(e)
         }), 500
+
+
+@app.route('/api/patient/<patient_id>/brief/stream', methods=['GET'])
+def stream_patient_brief(patient_id):
+    """Stream briefing generation progress and result via Server-Sent Events."""
+
+    def generate_stream():
+        try:
+            service = get_fhir_service()
+            yield _sse_event('status', {
+                "stage": "fhir",
+                "message": f"Querying FHIR for patient {patient_id}..."
+            })
+
+            bundle = service.fetch_patient_bundle(patient_id)
+            entry_count = len(bundle.get("entry", []))
+
+            yield _sse_event('status', {
+                "stage": "prompt",
+                "message": f"FHIR sync returned {entry_count} resources. Preparing Azure OpenAI prompt..."
+            })
+
+            yield _sse_event('status', {
+                "stage": "llm",
+                "message": "Prompting Azure OpenAI for the outreach briefing..."
+            })
+
+            briefing = service.summarize_for_care_manager(bundle)
+
+            yield _sse_event('complete', {
+                "success": True,
+                "patient_id": patient_id,
+                "briefing": briefing,
+                "bundle_entry_count": entry_count
+            })
+        except Exception as exc:
+            yield _sse_event('failure', {
+                "success": False,
+                "patient_id": patient_id,
+                "error": str(exc)
+            })
+
+    response = Response(stream_with_context(generate_stream()), mimetype='text/event-stream')
+    response.headers['Cache-Control'] = 'no-cache'
+    return response
 
 
 @app.route('/api/patients', methods=['GET'])

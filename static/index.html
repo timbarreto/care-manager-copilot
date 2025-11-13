@@ -130,6 +130,18 @@
             font-size: 13px;
         }
 
+        .briefing-meta {
+            color: var(--gray-400);
+            font-size: 13px;
+        }
+
+        .briefing-status-line {
+            font-size: 13px;
+            margin-top: 4px;
+            color: var(--blue-700);
+            font-weight: 600;
+        }
+
         .tag {
             background: var(--blue-100);
             color: var(--blue-700);
@@ -190,12 +202,19 @@
             color: var(--gray-400);
         }
 
-        .briefing-body {
-            min-height: 480px;
+        .briefing-window {
             border: 1px dashed var(--gray-200);
             border-radius: 16px;
-            padding: 24px;
             background: var(--gray-50);
+            min-height: 480px;
+            max-height: 520px;
+            padding: 0;
+            display: flex;
+        }
+
+        .briefing-body {
+            flex: 1;
+            padding: 24px;
             overflow-y: auto;
             white-space: pre-wrap;
             line-height: 1.6;
@@ -305,15 +324,18 @@
                 <div class="panel-header">
                     <div>
                         <h2 id="briefingHeader">Select a patient</h2>
-                        <p id="briefingStatus">Briefings include overview, risks, next-best actions, and bilingual script.</p>
+                        <p id="briefingMeta" class="briefing-meta">Briefings include overview, risks, next-best actions, and bilingual script.</p>
+                        <p id="briefingStatus" class="briefing-status-line"></p>
                     </div>
                 </div>
-                <div id="briefingBody" class="briefing-body empty-state">
-                    <svg viewBox="0 0 64 64" aria-hidden="true">
-                        <circle cx="32" cy="32" r="25"></circle>
-                        <path d="M20 26h24M20 34h24M20 42h16"></path>
-                    </svg>
-                    <p>Select a patient from the roster to generate a care manager briefing.</p>
+                <div class="briefing-window">
+                    <div id="briefingBody" class="briefing-body empty-state">
+                        <svg viewBox="0 0 64 64" aria-hidden="true">
+                            <circle cx="32" cy="32" r="25"></circle>
+                            <path d="M20 26h24M20 34h24M20 42h16"></path>
+                        </svg>
+                        <p>Select a patient from the roster to generate a care manager briefing.</p>
+                    </div>
                 </div>
             </article>
         </section>
@@ -326,8 +348,10 @@
         const briefingBody = document.getElementById('briefingBody');
         const briefingHeader = document.getElementById('briefingHeader');
         const briefingStatus = document.getElementById('briefingStatus');
+        const briefingMeta = document.getElementById('briefingMeta');
         let rosterData = [];
         let selectedPatientId = null;
+        let briefingStream = null;
 
         document.addEventListener('DOMContentLoaded', () => {
             loadRoster();
@@ -420,8 +444,10 @@
         }
 
         function resetBriefingState() {
+            stopBriefingStream();
             briefingHeader.textContent = 'Select a patient';
-            briefingStatus.textContent = 'Briefings include overview, risks, next-best actions, and bilingual script.';
+            briefingMeta.textContent = 'Briefings include overview, risks, next-best actions, and bilingual script.';
+            briefingStatus.textContent = '';
             briefingBody.className = 'briefing-body empty-state';
             briefingBody.innerHTML = `
                 <svg viewBox="0 0 64 64" aria-hidden="true">
@@ -441,7 +467,7 @@
             });
 
             briefingHeader.textContent = patient.name || 'Patient briefing';
-            briefingStatus.textContent = `DOB ${formatDate(patient.birth_date)} · ${patient.gender || 'Gender not listed'}`;
+            briefingMeta.textContent = `DOB ${formatDate(patient.birth_date)} · ${patient.gender || 'Gender not listed'}`;
 
             briefingBody.className = 'briefing-body loading-state';
             briefingBody.innerHTML = `
@@ -452,7 +478,75 @@
             loadBriefing(patient.patient_id);
         }
 
+        function stopBriefingStream() {
+            if (briefingStream) {
+                briefingStream.close();
+                briefingStream = null;
+            }
+        }
+
         async function loadBriefing(patientId) {
+            stopBriefingStream();
+
+            if (!window.EventSource) {
+                await loadBriefingFallback(patientId);
+                return;
+            }
+
+            const streamUrl = `/api/patient/${encodeURIComponent(patientId)}/brief/stream`;
+            briefingStatus.textContent = `Querying FHIR for patient ${patientId}...`;
+
+            briefingStream = new EventSource(streamUrl);
+            let completed = false;
+
+            briefingStream.addEventListener('status', (event) => {
+                try {
+                    const payload = JSON.parse(event.data);
+                    if (payload.message) {
+                        briefingStatus.textContent = payload.message;
+                    }
+                } catch (err) {
+                    console.error('Failed to parse status event', err);
+                }
+            });
+
+            briefingStream.addEventListener('complete', (event) => {
+                completed = true;
+                try {
+                    const payload = JSON.parse(event.data);
+                    briefingBody.className = 'briefing-body';
+                    briefingBody.textContent = payload.briefing || 'Briefing completed but no content returned.';
+                    briefingStatus.textContent = `Briefing ready · ${payload.bundle_entry_count || 0} FHIR entries analyzed`;
+                } catch (err) {
+                    handleBriefingError('Unable to parse briefing content.');
+                } finally {
+                    stopBriefingStream();
+                }
+            });
+
+            briefingStream.addEventListener('failure', (event) => {
+                completed = true;
+                try {
+                    const payload = JSON.parse(event.data);
+                    handleBriefingError(payload.error || 'Unable to generate briefing.');
+                } catch (err) {
+                    handleBriefingError('Unable to generate briefing.');
+                } finally {
+                    stopBriefingStream();
+                }
+            });
+
+            briefingStream.onerror = () => {
+                if (!completed) {
+                    handleBriefingError('Connection lost while generating briefing.');
+                    completed = true;
+                }
+                stopBriefingStream();
+            };
+        }
+
+        async function loadBriefingFallback(patientId) {
+            briefingStatus.textContent = `Generating briefing for patient ${patientId}...`;
             try {
                 const response = await fetch(`/api/patient/${encodeURIComponent(patientId)}/brief`);
                 const data = await response.json();
@@ -463,13 +557,19 @@
 
                 briefingBody.className = 'briefing-body';
                 briefingBody.textContent = data.briefing;
+                briefingStatus.textContent = `Briefing ready · ${data.bundle_entry_count || 0} FHIR entries analyzed`;
             } catch (error) {
-                briefingBody.className = 'briefing-body empty-state error-state';
-                briefingBody.innerHTML = `
-                    <strong>Briefing unavailable</strong>
-                    <span>${error.message}</span>
-                `;
+                handleBriefingError(error.message);
             }
+        }
+
+        function handleBriefingError(message) {
+            briefingBody.className = 'briefing-body empty-state error-state';
+            briefingBody.innerHTML = `
+                <strong>Briefing unavailable</strong>
+                <span>${message}</span>
+            `;
+            briefingStatus.textContent = message;
         }
     </script>
 </body>
