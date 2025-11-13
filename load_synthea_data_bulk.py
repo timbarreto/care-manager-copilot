@@ -3,7 +3,7 @@
 Utility script to bulk-load Synthea FHIR NDJSON into an Azure FHIR workspace.
 
 Steps performed:
-1. Rewrite conditional references (e.g., `Patient?identifier=`) to fixed `ResourceType/id` links and stage sanitized NDJSON files.
+1. Rewrite conditional references (e.g., `Patient?identifier=`) to fixed `ResourceType/id` links, deduplicate repeated records, and stage sanitized NDJSON files.
 2. Upload every staged *.ndjson file to a blob container.
 3. Trigger a first $import pass for base resources (Patient, Organization, Practitioner) and wait for completion.
 4. Trigger a second $import pass for dependent resources (Encounter, Observation, etc.) and optionally poll until completion.
@@ -31,6 +31,7 @@ import requests
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import ContainerClient
 from dotenv import load_dotenv
+from azure.core.exceptions import ResourceExistsError, HttpResponseError
 
 
 NdjsonUpload = Tuple[Path, str, str]
@@ -170,7 +171,6 @@ def collect_identifier_index(
             resource_id = resource.get("id")
             if not resource_id:
                 continue
-
             # Allow matching purely by resource ID if references already conform.
             index.setdefault((resource_key, "", resource_id), resource_id)
 
@@ -204,23 +204,26 @@ def preprocess_ndjson_files(
     staging_dir: Path,
     identifier_index: Dict[IdentifierKey, str],
     canonical_types: Dict[str, str],
-) -> Tuple[List[Tuple[Path, str]], int, int]:
+) -> Tuple[List[Tuple[Path, str]], int, int, int]:
     """Rewrite conditional references and emit sanitized NDJSON files in staging_dir."""
     processed: List[Tuple[Path, str]] = []
     total_resolved = 0
     total_unresolved = 0
+    total_skipped = 0
+    seen_ids: Dict[str, set[str]] = {}
 
     staging_dir.mkdir(parents=True, exist_ok=True)
     for original_path, resource_type in files:
         staged_path = staging_dir / original_path.name
-        resolved, unresolved = rewrite_ndjson_file(
-            original_path, staged_path, identifier_index, canonical_types
+        resolved, unresolved, skipped = rewrite_ndjson_file(
+            original_path, staged_path, identifier_index, canonical_types, seen_ids
         )
         total_resolved += resolved
         total_unresolved += unresolved
+        total_skipped += skipped
         processed.append((staged_path, resource_type))
 
-    return processed, total_resolved, total_unresolved
+    return processed, total_resolved, total_unresolved, total_skipped
 
 
 def rewrite_ndjson_file(
@@ -228,10 +231,12 @@ def rewrite_ndjson_file(
     target_path: Path,
     identifier_index: Dict[IdentifierKey, str],
     canonical_types: Dict[str, str],
-) -> Tuple[int, int]:
-    """Rewrite a single NDJSON file, returning (resolved_refs, unresolved_refs)."""
+    seen_ids: Dict[str, set[str]],
+) -> Tuple[int, int, int]:
+    """Rewrite a single NDJSON file, returning (resolved_refs, unresolved_refs, skipped_duplicates)."""
     resolved = 0
     unresolved = 0
+    skipped = 0
 
     with source_path.open("r", encoding="utf-8") as reader, target_path.open("w", encoding="utf-8") as writer:
         for line_number, line in enumerate(reader, start=1):
@@ -243,13 +248,22 @@ def rewrite_ndjson_file(
             except json.JSONDecodeError as exc:
                 sys.exit(f"Failed to parse JSON in {source_path} at line {line_number}: {exc}")
 
+            resource_type = (resource.get("resourceType") or "").strip().lower()
+            resource_id = (resource.get("id") or "").strip()
+            if resource_type and resource_id:
+                seen = seen_ids.setdefault(resource_type, set())
+                if resource_id in seen:
+                    skipped += 1
+                    continue
+                seen.add(resource_id)
+
             ref_resolved, ref_unresolved = rewrite_resource_references(resource, identifier_index, canonical_types)
             resolved += ref_resolved
             unresolved += ref_unresolved
             writer.write(json.dumps(resource))
             writer.write("\n")
 
-    return resolved, unresolved
+    return resolved, unresolved, skipped
 
 
 def rewrite_resource_references(
@@ -351,6 +365,21 @@ def infer_resource_type(file_path: Path) -> str:
     resource_type = stem.split("_", maxsplit=1)[0]
     # Preserve casing from filenames such as MedicationRequest.ndjson
     return resource_type
+
+
+def ensure_container_exists(container_client: ContainerClient) -> None:
+    """Create the target container if it is missing."""
+    try:
+        container_client.create_container()
+        print("Created target blob container.")
+    except ResourceExistsError:
+        # Container already present; nothing to do.
+        return
+    except HttpResponseError as exc:
+        # Surface permission issues up front to avoid repeated upload failures.
+        if exc.status_code == 409 and "ContainerAlreadyExists" in str(exc):
+            return
+        sys.exit(f"Failed to ensure blob container exists: {exc}")
 
 
 def upload_files(
@@ -473,12 +502,12 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory(prefix="synthea-preprocessed-") as tmpdir:
         staging_dir = Path(tmpdir)
-        processed_files, resolved_refs, unresolved_refs = preprocess_ndjson_files(
+        processed_files, resolved_refs, unresolved_refs, skipped_dupes = preprocess_ndjson_files(
             discovered_files, staging_dir, identifier_index, canonical_types
         )
         print(
             f"Preprocessed NDJSON files in {staging_dir}: resolved {resolved_refs} conditional references; "
-            f"{unresolved_refs} unresolved."
+            f"{unresolved_refs} unresolved; skipped {skipped_dupes} duplicate resources."
         )
         if unresolved_refs:
             print(
@@ -506,6 +535,7 @@ def main() -> None:
                 container_url,
                 credential=credential
             )
+        ensure_container_exists(container_client)
 
         total_files = len(processed_files)
         print(f"Uploading {total_files} preprocessed NDJSON files to {container_url} under prefix '{prefix}'")
