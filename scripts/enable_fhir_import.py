@@ -228,7 +228,7 @@ def main():
                 "--set", "identity.type=SystemAssigned"
             ]
             result = subprocess.run(
-                identity_cmd, capture_output=True, text=True, timeout=180)
+                identity_cmd, capture_output=True, text=True, timeout=600)
             if result.returncode != 0:
                 print(f"Error enabling managed identity: {result.stderr}")
                 sys.exit(1)
@@ -249,7 +249,7 @@ def main():
         ]
 
         result = subprocess.run(
-            import_cmd, capture_output=True, text=True, timeout=300)
+            import_cmd, capture_output=True, text=True, timeout=600)
 
         if result.returncode != 0:
             print(f"\n" + "=" * 70)

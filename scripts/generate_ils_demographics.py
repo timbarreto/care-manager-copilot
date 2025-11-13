@@ -26,7 +26,7 @@ def parse_args() -> argparse.Namespace:
         "--total-patients",
         "-t",
         type=int,
-        default=100,
+        default=50,
         help="Total number of patients to generate (default: 100).",
     )
     parser.add_argument(
@@ -40,7 +40,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--version", default="3.4.0", help="Synthea version (default: 3.4.0)."
     )
-    parser.add_argument("--seed", type=int, help="Base seed for reproducibility.")
+    parser.add_argument("--seed", type=int,
+                        help="Base seed for reproducibility.")
     return parser.parse_args()
 
 
@@ -70,7 +71,8 @@ def generate_cohort(
                 break
 
     print(f"\n{'='*60}")
-    print(f"Generating {cohort_name}: {num_patients} patients aged {min_age}-{max_age}")
+    print(
+        f"Generating {cohort_name}: {num_patients} patients aged {min_age}-{max_age}")
     print(f"{'='*60}")
     subprocess.run(cmd, check=True)
 
@@ -121,7 +123,7 @@ def main() -> None:
     # Build base command
     base_cmd = [
         "python",
-        "generate_synthea_ndjson.py",
+        "scripts/generate_synthea_ndjson.py",
         "--output-dir",
         str(args.output_dir),
         "--version",
