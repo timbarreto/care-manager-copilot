@@ -201,57 +201,68 @@ def main():
         identity = current_config.get('identity', {})
         print(f"  Identity Type: {identity.get('type', 'None')}")
 
-        # Prepare PATCH payload to enable import and managed identity
+        # Enable import using az resource update (the REST API PATCH doesn't work reliably)
         print("\n" + "=" * 70)
         print("Enabling system-assigned managed identity and bulk import...")
         print("=" * 70)
 
-        patch_payload = {
-            "identity": {
-                "type": "SystemAssigned"
-            },
-            "properties": {
-                "importConfiguration": {
-                    "enabled": True,
-                    "initialImportMode": False
-                }
-            }
-        }
+        print("Using Azure CLI to update FHIR service configuration...")
+        import subprocess
 
-        # Update the FHIR service
-        print("Updating FHIR service...")
-        print(f"PATCH payload: {json.dumps(patch_payload, indent=2)}")
-        patch_url = f"{resource_url}?api-version={api_version}"
-        response = requests.patch(patch_url, headers=headers, json=patch_payload, timeout=60)
+        # First ensure managed identity is enabled
+        if identity.get('type') != 'SystemAssigned':
+            print("Enabling system-assigned managed identity...")
+            identity_cmd = [
+                "az", "resource", "update",
+                "--ids", f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.HealthcareApis/workspaces/{workspace_name}/fhirservices/{service_name}",
+                "--api-version", "2022-06-01",
+                "--set", "identity.type=SystemAssigned"
+            ]
+            result = subprocess.run(identity_cmd, capture_output=True, text=True, timeout=180)
+            if result.returncode != 0:
+                print(f"Error enabling managed identity: {result.stderr}")
+                sys.exit(1)
+            print("✓ Managed identity enabled")
 
-        print(f"Response status: {response.status_code}")
-        if response.status_code not in [200, 201, 202]:
+        # Enable import configuration with integration data store
+        print(f"Enabling import configuration with integration data store: {storage_account_name}")
+        import_cmd = [
+            "az", "resource", "update",
+            "--ids", f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.HealthcareApis/workspaces/{workspace_name}/fhirservices/{service_name}",
+            "--api-version", "2022-06-01",
+            "--set",
+            "properties.importConfiguration.enabled=true",
+            "properties.importConfiguration.initialImportMode=false",
+            f"properties.importConfiguration.integrationDataStore={storage_account_name}"
+        ]
+
+        result = subprocess.run(import_cmd, capture_output=True, text=True, timeout=300)
+
+        if result.returncode != 0:
             print(f"\n" + "=" * 70)
-            print(f"ERROR: Failed to enable bulk import (HTTP {response.status_code})")
+            print(f"ERROR: Failed to enable bulk import")
             print("=" * 70)
-            print(response.text)
+            print(result.stderr)
             sys.exit(1)
 
-        # Print full response for debugging
-        print(f"Response body:")
-        print(json.dumps(response.json(), indent=2))
-
-        result = response.json()
+        # Parse the JSON output
+        result_data = json.loads(result.stdout)
 
         print("\n" + "=" * 70)
         print("SUCCESS! Configuration updated")
         print("=" * 70)
 
-        identity_result = result.get('identity', {})
+        identity_result = result_data.get('identity', {})
         print(f"\nManaged Identity:")
         print(f"  Type: {identity_result.get('type', 'None')}")
         principal_id = identity_result.get('principalId', 'N/A')
         print(f"  Principal ID: {principal_id}")
 
-        import_result = result.get('properties', {}).get('importConfiguration', {})
+        import_result = result_data.get('properties', {}).get('importConfiguration', {})
         print(f"\nImport Configuration:")
         print(f"  Enabled: {import_result.get('enabled', False)}")
         print(f"  Initial Import Mode: {import_result.get('initialImportMode', False)}")
+        print(f"  Integration Data Store: {import_result.get('integrationDataStore', 'N/A')}")
 
         # Assign Storage Blob Data Contributor role
         if assign_rbac and principal_id != 'N/A':

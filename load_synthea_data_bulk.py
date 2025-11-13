@@ -22,6 +22,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
+from urllib.parse import urlparse
 
 import requests
 from azure.identity import DefaultAzureCredential
@@ -242,7 +243,19 @@ def main() -> None:
 
     prefix = args.prefix or f"synthea-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
 
-    container_client = ContainerClient.from_container_url(container_url)
+    # Check if container URL has SAS token (contains '?')
+    # If not, use managed identity for authentication
+    credential = DefaultAzureCredential(exclude_interactive_browser_credential=False)
+
+    if '?' in container_url:
+        print("Using SAS token authentication for blob storage")
+        container_client = ContainerClient.from_container_url(container_url)
+    else:
+        print("Using managed identity authentication for blob storage")
+        container_client = ContainerClient.from_container_url(
+            container_url,
+            credential=credential
+        )
 
     if args.skip_upload:
         if not args.prefix:
@@ -255,8 +268,6 @@ def main() -> None:
         print(f"Uploading {len(files)} NDJSON files to {container_url} under prefix '{prefix}'")
         uploads = upload_files(container_client, files, prefix)
 
-    credential = DefaultAzureCredential(
-        exclude_interactive_browser_credential=False)
     status_url = trigger_import(credential, fhir_url, container_url, uploads)
 
     if args.wait:
