@@ -123,7 +123,9 @@ def discover_ndjson_files(
 def infer_resource_type(file_path: Path) -> str:
     """Infer the FHIR resource type from the filename."""
     stem = file_path.stem
-    return stem.split("_", maxsplit=1)[0]
+    resource_type = stem.split("_", maxsplit=1)[0]
+    # FHIR resource types are case-sensitive and must be capitalized
+    return resource_type.capitalize()
 
 
 def upload_files(

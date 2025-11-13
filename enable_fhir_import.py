@@ -226,13 +226,14 @@ def main():
 
         # Enable import configuration with integration data store
         print(f"Enabling import configuration with integration data store: {storage_account_name}")
+        print("Note: Initial import mode is required for importing data into an empty FHIR server")
         import_cmd = [
             "az", "resource", "update",
             "--ids", f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.HealthcareApis/workspaces/{workspace_name}/fhirservices/{service_name}",
             "--api-version", "2022-06-01",
             "--set",
             "properties.importConfiguration.enabled=true",
-            "properties.importConfiguration.initialImportMode=false",
+            "properties.importConfiguration.initialImportMode=true",
             f"properties.importConfiguration.integrationDataStore={storage_account_name}"
         ]
 
