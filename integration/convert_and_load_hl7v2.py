@@ -122,7 +122,7 @@ def convert_hl7v2_message(
             return response.json()
         else:
             print(f"  ✗ Conversion failed: {response.status_code}")
-            print(f"    {response.text[:200]}")
+            print(f"    {response.text}")
             return None
 
     except Exception as e:
