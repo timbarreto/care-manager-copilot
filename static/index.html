@@ -502,7 +502,6 @@
                         <h2 id="briefingHeader">Patient Details</h2>
                         <p id="briefingMeta" class="briefing-meta">Briefings include overview, risks, next-best actions, and bilingual script.</p>
                         <p id="briefingStatus" class="briefing-status-line">
-                            <span id="statusSpinner" class="status-spinner" aria-hidden="true"></span>
                             <span id="statusMessage"></span>
                         </p>
                     </div>
@@ -537,7 +536,6 @@
         const refreshBtn = document.getElementById('refreshRosterBtn');
         const briefingHeader = document.getElementById('briefingHeader');
         const briefingStatus = document.getElementById('briefingStatus');
-        const statusSpinner = document.getElementById('statusSpinner');
         const statusMessage = document.getElementById('statusMessage');
         const briefingMeta = document.getElementById('briefingMeta');
         const fhirPanel = document.getElementById('fhirPanel');
@@ -593,13 +591,8 @@
         }
 
         function updateBriefingStatus(message, options = {}) {
-            const loading = Boolean(options.loading);
             if (statusMessage) {
                 statusMessage.textContent = message || '';
-            }
-            if (statusSpinner) {
-                statusSpinner.classList.toggle('active', loading);
-                statusSpinner.setAttribute('aria-hidden', loading ? 'false' : 'true');
             }
         }
 
