@@ -130,28 +130,47 @@ def convert_hl7v2_message(
         return None
 
 
-def post_resource_to_fhir(credential, fhir_url, resource):
+def post_resource_to_fhir(credential, fhir_url, resource, patient_id_map=None):
     """
-    POST a single FHIR resource to the server.
+    POST a single FHIR resource to the server with conditional create for Patients.
 
     Args:
         credential: Azure credential for authentication
         fhir_url: FHIR service URL
         resource: FHIR resource to POST
+        patient_id_map: Optional dict mapping temporary patient IDs to actual server IDs
 
     Returns:
-        bool: True if successful, False otherwise
+        tuple: (success: bool, resource_id: str)
     """
     resource_type = resource.get("resourceType")
     if not resource_type:
         print("  ✗ Invalid resource: missing resourceType")
-        return False
+        return False, "missing resourceType"
+
+    # Update patient references before posting
+    if patient_id_map:
+        resource = update_patient_references(resource, patient_id_map)
 
     access_token = credential.get_token(f"{fhir_url}/.default").token
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/fhir+json",
     }
+
+    # For Patient resources, use conditional create based on identifier
+    if resource_type == "Patient":
+        # Find the MRN identifier
+        identifiers = resource.get("identifier", [])
+        mrn_identifier = None
+        for identifier in identifiers:
+            if "MRN" in identifier.get("system", ""):
+                mrn_identifier = identifier.get("value")
+                break
+
+        if mrn_identifier:
+            # Use conditional create: only create if no patient with this identifier exists
+            headers["If-None-Exist"] = f"identifier={mrn_identifier}"
 
     try:
         response = requests.post(
@@ -166,10 +185,32 @@ def post_resource_to_fhir(credential, fhir_url, resource):
             resource_id = created.get("id", "unknown")
             return True, resource_id
         else:
-            return False, f"HTTP {response.status_code}"
+            return False, f"HTTP {response.status_code}: {response.text[:200]}"
 
     except Exception as e:
         return False, str(e)
+
+
+def update_patient_references(resource, patient_id_map):
+    """
+    Update Patient references in a resource using the patient ID mapping.
+
+    Args:
+        resource: FHIR resource (will be modified in place)
+        patient_id_map: Dict mapping temporary patient IDs to actual server IDs
+
+    Returns:
+        Updated resource
+    """
+    # Convert to JSON string to do bulk replacements
+    resource_str = json.dumps(resource)
+
+    # Replace all patient ID references
+    for temp_id, actual_id in patient_id_map.items():
+        # Replace references like "Patient/temp-id"
+        resource_str = resource_str.replace(f"Patient/{temp_id}", f"Patient/{actual_id}")
+
+    return json.loads(resource_str)
 
 
 def extract_resources_from_bundle(bundle):
@@ -228,6 +269,10 @@ def process_messages(
         "resource_types": {},
     }
 
+    # Track patient ID mappings across all messages
+    # Maps temporary patient IDs (from converter) to actual server patient IDs
+    patient_id_map = {}
+
     for idx, (patient_id, msg_type, template, content) in enumerate(messages, 1):
         print(f"\n[{idx}/{len(messages)}] Processing {patient_id} - {msg_type}")
         print(f"  Template: {template}")
@@ -266,9 +311,35 @@ def process_messages(
         # POST resources to FHIR server (unless dry-run)
         if not dry_run:
             print(f"  → Posting resources to FHIR server...")
-            for resource in resources:
+
+            # Separate Patient resources from others
+            patient_resources = [r for r in resources if r.get("resourceType") == "Patient"]
+            other_resources = [r for r in resources if r.get("resourceType") != "Patient"]
+
+            # Post Patient resources first with conditional create
+            for resource in patient_resources:
+                temp_patient_id = resource.get("id")
+                success, result = post_resource_to_fhir(
+                    credential, fhir_url, resource, patient_id_map
+                )
+
+                if success:
+                    stats["resources_created"] += 1
+                    # Map temporary patient ID to actual server ID
+                    if temp_patient_id and result != "unknown":
+                        patient_id_map[temp_patient_id] = result
+                    if verbose:
+                        print(f"    ✓ Patient/{result} (conditional create)")
+                else:
+                    stats["resources_failed"] += 1
+                    print(f"    ✗ Failed to create Patient: {result}")
+
+            # Post other resources with updated patient references
+            for resource in other_resources:
                 resource_type = resource.get("resourceType")
-                success, result = post_resource_to_fhir(credential, fhir_url, resource)
+                success, result = post_resource_to_fhir(
+                    credential, fhir_url, resource, patient_id_map
+                )
 
                 if success:
                     stats["resources_created"] += 1

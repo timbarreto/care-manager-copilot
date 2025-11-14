@@ -45,18 +45,35 @@ class FHIRCareManagerService:
         Fetch patient FHIR bundle including related clinical resources.
 
         Args:
-            patient_id: The patient identifier
+            patient_id: The patient identifier (can be resource ID or MRN)
 
         Returns:
             FHIR Bundle as a dictionary
         """
         # Get Entra ID token for FHIR
         token = self.credential.get_token(f"{self.fhir_url}/.default").token
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/fhir+json"
+        }
+
+        # Determine if patient_id is a resource ID or an identifier (MRN)
+        # Resource IDs can be UUIDs or extended UUIDs (like Synthea's format)
+        # If it contains only hex chars and dashes, treat as resource ID
+        import re
+        # Match standard UUID or extended UUID formats (e.g., uuid-suffix)
+        resource_id_pattern = re.compile(r'^[0-9a-f-]+$', re.IGNORECASE)
+        is_resource_id = bool(resource_id_pattern.match(patient_id)) and '-' in patient_id
 
         # Build search query with _revinclude to pull related resources
+        if is_resource_id:
+            search_param = f"_id={patient_id}"
+        else:
+            search_param = f"identifier={patient_id}"
+
         url = (
             f"{self.fhir_url}/Patient"
-            f"?_id={patient_id}"
+            f"?{search_param}"
             f"&_revinclude=Condition:subject"
             f"&_revinclude=MedicationRequest:subject"
             f"&_revinclude=Observation:subject"
@@ -64,11 +81,6 @@ class FHIRCareManagerService:
             f"&_revinclude=CarePlan:subject"
             f"&_count=200"
         )
-
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/fhir+json"
-        }
 
         response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
